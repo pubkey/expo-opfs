@@ -1,6 +1,5 @@
-import { File as ExpoFile, Directory as ExpoDirectory } from 'expo-file-system';
-import { documentDirectory } from 'expo-file-system/legacy';
-const OPFS_ROOT = new ExpoDirectory(documentDirectory + '.expo-opfs');
+import { File as ExpoFile, Directory as ExpoDirectory, Paths } from 'expo-file-system';
+const OPFS_ROOT = new ExpoDirectory(Paths.document, '.expo-opfs');
 
 export class FileSystemHandle {
     readonly kind: 'file' | 'directory';

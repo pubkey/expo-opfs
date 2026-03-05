@@ -6,6 +6,10 @@ export const EncodingType = {
     Utf8: 'utf8'
 };
 
+export const Paths = {
+    document: documentDirectory
+};
+
 const _memFs = new Map(); // stores entries as { isDir: boolean, data: Uint8Array | null }
 
 class ExpoFileHandleMock {
