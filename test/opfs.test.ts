@@ -275,6 +275,36 @@ describe('OPFS', () => {
     expect(await file.text()).toBe('Hello, Universe!');
   });
 
+  test('should write and read from specific positions correctly', async () => {
+    const rootDirectory = await globalThis.navigator.storage.getDirectory();
+    const fileHandle = await rootDirectory.getFileHandle('specificPositions.txt', { create: true });
+    const writeHandle = await fileHandle.createWritable();
+
+    // Write base text
+    await writeHandle.write('0123456789');
+
+    // Write at position 2
+    await writeHandle.write({ type: 'write', data: 'AB', position: 2 });
+
+    // Write at position 8 using seek
+    await writeHandle.seek(8);
+    await writeHandle.write('YZ');
+    await writeHandle.close();
+
+    const file = await fileHandle.getFile();
+
+    // File content should be: 01AB4567YZ
+    expect(await file.text()).toBe('01AB4567YZ');
+
+    // Read from position 2, length 2 (should be AB)
+    const blob1 = file.slice(2, 4);
+    expect(await blob1.text()).toBe('AB');
+
+    // Read from position 8, length 2 (should be YZ)
+    const blob2 = file.slice(8, 10);
+    expect(await blob2.text()).toBe('YZ');
+  });
+
   test('should handle large file writes', async () => {
     const rootDirectory = await globalThis.navigator.storage.getDirectory();
     const fileHandle = await rootDirectory.getFileHandle('largeFile.txt', { create: true });

@@ -16,11 +16,11 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:expo": "jest",
-    "test:expo:watch": "jest --watch",
-    "test:browser": "jest --config jest.config.browser.js",
+    "test": "npm run test:browser && npm run test:expo",
+    "test:watch": "jest --watch --verbose",
+    "test:expo": "jest --verbose",
+    "test:expo:watch": "jest --watch --verbose",
+    "test:browser": "jest --config jest.config.browser.js --verbose",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
