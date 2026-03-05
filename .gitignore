@@ -105,3 +105,6 @@ dist
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Test Screenshots
+__screenshots__/

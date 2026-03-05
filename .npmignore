@@ -2,7 +2,6 @@
 .github/
 .nyc_output/
 coverage/
-src/
 test/
 example/
 jest.config.js

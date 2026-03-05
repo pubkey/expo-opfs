@@ -1,14 +1,6 @@
 # expo-opfs
 
-OPFS polyfill for expo based on the Expo Filesystem API.
-
-
-## Resources
-
-- OPFS docs https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
-- OPFS API https://web.dev/articles/origin-private-file-system?hl=en
-- Good test-suite to test OPFS: https://github.com/jurerotar/opfs-mock/blob/master/src/opfs.test.ts
-- Expo Filesystem API https://docs.expo.dev/versions/latest/sdk/filesystem/
+[OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) polyfill for expo based on the [Expo Filesystem API](https://docs.expo.dev/versions/latest/sdk/filesystem/).
 
 ## Usage
 
@@ -63,5 +55,14 @@ This limitation exists because the underlying `expo-file-system` wrapper relies 
 
 The implementation is validated against the exact same test suites inside both a raw Node.js/JSDOM simulator and a native **physical smartphone environment** simultaneously via a unified Harness.
 
-1. **JSDOM Automated Suite**: Run `npm run test` to execute native mock interactions instantly through Jest across multiple parallel environments.
-2. **On-Device Target Simulation**: Run `npm run test:example` to launch a fully configured minimal `App.tsx` container on your physical development device through Expo Go. The App transparently mounts the exact identical 111+ OPFS compliance benchmarks executed inside `npm run test`, natively resolving them asynchronously entirely outside the simulated Jest context, and logs the unified output straight to your screen!
+1. **Browser Automated Suite**: Run `npm run test:browser` to execute native mock interactions instantly through Jest across a Chromium browser environment.
+2. **Expo Node Simulator**: Run `npm run test:expo` to execute the test suite natively under Expo's Jest preset simulating the React Native bridge.
+3. **On-Device Target Simulation**: Run `npm run test:example` to launch a fully configured minimal `App.tsx` container on your physical development device through Expo Go. The App transparently mounts the exact identical 111+ OPFS compliance benchmarks executed inside `npm run test`, natively resolving them asynchronously entirely outside the simulated Jest context, and logs the unified output straight to your screen!
+
+## Resources
+
+- [OPFS docs](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
+- [OPFS API](https://web.dev/articles/origin-private-file-system?hl=en)
+- [Good test-suite to test OPFS](https://github.com/jurerotar/opfs-mock/blob/master/src/opfs.test.ts)
+- [Expo Filesystem API](https://docs.expo.dev/versions/latest/sdk/filesystem/)
+- [RxDB OPFS docs](https://rxdb.info/rx-storage-opfs.html)

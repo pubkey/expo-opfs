@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment, @typescript-eslint/no-require-imports */
 export type TestFn = () => Promise<void> | void;
 export type DescribeFn = () => void;
 export type HookFn = () => Promise<void> | void;
@@ -18,15 +19,12 @@ let currentSuite: TestSuite | null = null;
 
 // Dual-Environment Describe
 export function describe(name: string, fn: DescribeFn) {
-    if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
-        // Jest natively handles it if we are inside Node.js testing
-        // @ts-ignore
-        const jestDescribe = require('@jest/globals').describe;
-        jestDescribe(name, fn);
-        return;
+    if (typeof (globalThis as any).describe === 'function') {
+        return (globalThis as any).describe(name, fn);
     }
-
-    // Otherwise, we are inside React Native device container mapping!
+    if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
+        return require('@jest/globals').describe(name, fn);
+    }
     currentSuite = { name, tests: [], beforeEachHooks: [] };
     registeredSuites.push(currentSuite);
     fn();
@@ -35,13 +33,12 @@ export function describe(name: string, fn: DescribeFn) {
 
 // Dual-Environment Test
 export function test(name: string, fn: TestFn) {
-    if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
-        // @ts-ignore
-        const jestTest = require('@jest/globals').test;
-        jestTest(name, fn);
-        return;
+    if (typeof (globalThis as any).test === 'function') {
+        return (globalThis as any).test(name, fn);
     }
-
+    if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
+        return require('@jest/globals').test(name, fn);
+    }
     if (currentSuite) {
         currentSuite.tests.push({ name, fn });
     }
@@ -49,13 +46,12 @@ export function test(name: string, fn: TestFn) {
 
 // Dual-Environment Hook
 export function beforeEach(fn: HookFn) {
-    if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
-        // @ts-ignore
-        const jestBeforeEach = require('@jest/globals').beforeEach;
-        jestBeforeEach(fn);
-        return;
+    if (typeof (globalThis as any).beforeEach === 'function') {
+        return (globalThis as any).beforeEach(fn);
     }
-
+    if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
+        return require('@jest/globals').beforeEach(fn);
+    }
     if (currentSuite) {
         currentSuite.beforeEachHooks.push(fn);
     }
@@ -63,8 +59,10 @@ export function beforeEach(fn: HookFn) {
 
 // Lightweight Custom Expect Harness matching Jest Syntax for App.tsx execution
 export function expect(received: any) {
+    if (typeof (globalThis as any).expect === 'function') {
+        return (globalThis as any).expect(received);
+    }
     if (typeof process !== 'undefined' && process.env.JEST_WORKER_ID !== undefined) {
-        // @ts-ignore
         return require('@jest/globals').expect(received);
     }
 

@@ -195,7 +195,6 @@ export class FileSystemWritableFileStream {
                 if (typeof atob === 'function') {
                     binaryStr = atob(b64);
                 } else if ('Buffer' in globalThis) {
-                    // @ts-ignore
                     binaryStr = (globalThis as any).Buffer.from(b64, 'base64').toString('binary');
                 }
 
