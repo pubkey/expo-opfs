@@ -3,6 +3,10 @@ import { StyleSheet, Text, View, ScrollView } from 'react-native';
 import { useEffect, useState } from 'react';
 import { applyPolyfill } from 'expo-opfs';
 
+import { registeredSuites } from '../test/harness';
+import '../test/opfs.test';
+import '../test/parallel.test';
+
 export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
 
@@ -20,74 +24,38 @@ export default function App() {
     log('Initializing OPFS Example Tests...');
     try {
       const root = await navigator.storage.getDirectory();
-      log('✓ OPFS Root Directory obtained');
+      log('✓ OPFS Root Directory obtained. Running ' + registeredSuites.length + ' Suites.');
 
-      const fileHandle = await root.getFileHandle('test-ondevice.txt', { create: true });
-      log('✓ FileHandle created');
+      let passedCount = 0;
+      let failedCount = 0;
 
-      // Test 1: Write initial string
-      let writable = await fileHandle.createWritable();
-      const encoder = new TextEncoder();
-      await writable.write(encoder.encode('1234567890'));
-      await writable.close();
+      for (const suite of registeredSuites) {
+        log(`\n▶ Suite: ${suite.name}`);
 
-      let file = await fileHandle.getFile();
-      let text = await file.text();
-      if (text !== '1234567890') throw new Error(`Expected "1234567890", got "${text}"`);
-      log('✓ Test 1 Passed: Basic string write & read');
+        for (const test of suite.tests) {
+          try {
+            // Execute all registered beforeEach hooks sequentially
+            for (const hook of suite.beforeEachHooks) {
+              await hook();
+            }
 
-      // Test 2: Write at specific position via WriteParams
-      writable = await fileHandle.createWritable({ keepExistingData: true });
-      await writable.write({ type: 'write', data: encoder.encode('ABC'), position: 3 });
-      await writable.close();
+            // Execute test
+            await test.fn();
 
-      file = await fileHandle.getFile();
-      text = await file.text();
-      if (text !== '123ABC7890') throw new Error(`Expected "123ABC7890", got "${text}"`);
-      log('✓ Test 2 Passed: Write at position (WriteParams)');
+            passedCount++;
+          } catch (e: any) {
+            log(`❌ FAILED: ${test.name}`);
+            log(`   Reason: ${e.message}`);
+            failedCount++;
+          }
+        }
+      }
 
-      // Test 3: Write at specific position via seek()
-      writable = await fileHandle.createWritable({ keepExistingData: true });
-      await writable.seek(6);
-      await writable.write(encoder.encode('DEF'));
-      await writable.close();
-
-      file = await fileHandle.getFile();
-      text = await file.text();
-      if (text !== '123ABCDEF0') throw new Error(`Expected "123ABCDEF0", got "${text}"`);
-      log('✓ Test 3 Passed: Write at position (seek)');
-
-      // Test 4: Read specific slice using Blob.slice
-      const slice = file.slice(3, 9);
-      const sliceText = await slice.text();
-      if (sliceText !== 'ABCDEF') throw new Error(`Expected "ABCDEF", got "${sliceText}"`);
-      log('✓ Test 4 Passed: Read specific slice');
-
-      // Test 5: Truncate down
-      writable = await fileHandle.createWritable({ keepExistingData: true });
-      await writable.truncate(5);
-      await writable.close();
-
-      file = await fileHandle.getFile();
-      text = await file.text();
-      if (text !== '123AB') throw new Error(`Expected "123AB", got "${text}"`);
-      log('✓ Test 5 Passed: Truncate file down');
-
-      // Test 6: Extend with truncate
-      writable = await fileHandle.createWritable({ keepExistingData: true });
-      await writable.truncate(8);
-      await writable.close();
-
-      file = await fileHandle.getFile();
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      if (bytes.length !== 8 || bytes[7] !== 0) throw new Error(`Expected null padding, got length ${bytes.length}`);
-      log('✓ Test 6 Passed: Extend with zero-padding');
-
-      log('✅ ALL ON-DEVICE SANITY TESTS PASSED!');
+      log(`\n✅ ALL SUITES COMPLETED`);
+      log(`📊 Passed: ${passedCount} | Failed: ${failedCount}`);
 
     } catch (e: any) {
-      log('❌ ERROR: ' + e.message);
+      log('❌ FATAL ERROR: ' + e.message);
     }
   }
 

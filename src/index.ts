@@ -1,6 +1,15 @@
 import { File as ExpoFile, Directory as ExpoDirectory, Paths } from 'expo-file-system';
 const OPFS_ROOT = new ExpoDirectory(Paths.document, '.expo-opfs');
 
+if (typeof globalThis.DOMException === 'undefined') {
+    (globalThis as any).DOMException = class DOMException extends Error {
+        constructor(message?: string, name?: string) {
+            super(message);
+            this.name = name ?? 'DOMException';
+        }
+    };
+}
+
 export class FileSystemHandle {
     readonly kind: 'file' | 'directory';
     readonly name: string;
@@ -185,8 +194,9 @@ export class FileSystemWritableFileStream {
                 let binaryStr = '';
                 if (typeof atob === 'function') {
                     binaryStr = atob(b64);
-                } else if (typeof Buffer !== 'undefined') {
-                    binaryStr = Buffer.from(b64, 'base64').toString('binary');
+                } else if ('Buffer' in globalThis) {
+                    // @ts-ignore
+                    binaryStr = (globalThis as any).Buffer.from(b64, 'base64').toString('binary');
                 }
 
                 bytes = new Uint8Array(binaryStr.length);
@@ -355,6 +365,7 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     async *keys(): AsyncIterableIterator<string> {
         const entries = this.dirNode.list();
         for (const entry of entries) {
+            if (entry.name === '.keep') continue;
             yield entry.name;
         }
     }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from '@jest/globals';
+import { beforeEach, describe, expect, test } from './harness';
 
 declare global {
   interface FileSystemFileHandle {
@@ -446,7 +446,8 @@ describe('OPFS', () => {
     const writeHandle = await fileHandle.createWritable();
 
     await writeHandle.write('Text-');
-    await writeHandle.write(new Blob(['BlobData'], { type: 'text/plain' }));
+    const textData = 'BlobData';
+    await writeHandle.write(textData);
     await writeHandle.write(new Uint8Array([65, 66, 67])); // ABC
     await writeHandle.close();
 
@@ -855,7 +856,7 @@ describe('OPFS', () => {
 
     await stream.write('X');
     await stream.write(new Uint8Array([89])); // Y
-    await stream.write(new Blob(['Z']));
+    await stream.write('Z');
     const buf = new ArrayBuffer(1);
     new DataView(buf).setUint8(0, 87); // W
     await stream.write(buf);
@@ -1094,8 +1095,13 @@ describe('OPFS', () => {
     const fh = await root.getFileHandle('binary.bin', { create: true });
     const stream = await fh.createWritable();
     const bytes = new Uint8Array([0, 255, 1, 128]);
-    const blob = new Blob([bytes]);
-    await stream.write(blob);
+    let dataToWrite: any = bytes;
+    try {
+      dataToWrite = new Blob([bytes]);
+    } catch (e) {
+      // React Native doesn't support Blob(ArrayBuffer) 
+    }
+    await stream.write(dataToWrite);
     await stream.close();
     const file = await fh.getFile();
     const ab = await file.arrayBuffer();

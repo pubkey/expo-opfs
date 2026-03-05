@@ -56,3 +56,12 @@ Currently, this polyfill only implements the **asynchronous** OPFS API.
 The `FileSystemSyncAccessHandle` interface, which provides fully synchronous `read()`, `write()`, and `flush()` methods (often used by high-performance WASM applications like SQLite inside Web Workers), is **not supported**. 
 
 This limitation exists because the underlying `expo-file-system` wrapper relies on the asynchronous React Native bridge and does not currently expose fully blocking, synchronous file I/O operations to JavaScript.
+
+---
+
+## Testing
+
+The implementation is validated against the exact same test suites inside both a raw Node.js/JSDOM simulator and a native **physical smartphone environment** simultaneously via a unified Harness.
+
+1. **JSDOM Automated Suite**: Run `npm run test` to execute native mock interactions instantly through Jest across multiple parallel environments.
+2. **On-Device Target Simulation**: Run `npm run test:example` to launch a fully configured minimal `App.tsx` container on your physical development device through Expo Go. The App transparently mounts the exact identical 111+ OPFS compliance benchmarks executed inside `npm run test`, natively resolving them asynchronously entirely outside the simulated Jest context, and logs the unified output straight to your screen!

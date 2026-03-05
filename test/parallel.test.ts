@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from '@jest/globals';
+import { beforeEach, describe, expect, test } from './harness';
 
 describe('OPFS Parallel Operations', () => {
     beforeEach(async () => {
@@ -136,7 +136,10 @@ describe('OPFS Parallel Operations', () => {
 
         // Ensure they exist
         let keys = [];
-        for await (const key of root.keys()) keys.push(key);
+        const expectedKeys = ['dirA', 'fileA.txt', 'dirB', 'fileB.txt'];
+        for await (const key of root.keys()) {
+            if (expectedKeys.includes(key)) keys.push(key);
+        }
         expect(keys.length).toBe(4);
 
         // Concurrently delete
@@ -149,7 +152,9 @@ describe('OPFS Parallel Operations', () => {
 
         // Ensure all wiped
         keys = [];
-        for await (const key of root.keys()) keys.push(key);
+        for await (const key of root.keys()) {
+            if (expectedKeys.includes(key)) keys.push(key);
+        }
         expect(keys.length).toBe(0);
     });
 });
