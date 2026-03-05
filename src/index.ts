@@ -41,14 +41,49 @@ export class FileSystemFileHandle extends FileSystemHandle {
             throw new DOMException('File could not be read', 'NotFoundError');
         }
 
-        if (typeof File !== 'undefined') {
-            return new File([contentBytes as any], this.name, { lastModified: Date.now() });
+        try {
+            if (typeof File !== 'undefined') {
+                return new File([contentBytes as any], this.name, { lastModified: Date.now() });
+            }
+            const b = new Blob([contentBytes as any]);
+            (b as any).name = this.name;
+            (b as any).lastModified = Date.now();
+            return b as unknown as File;
+        } catch (e: any) {
+            // React Native's Blob constructor does not support ArrayBuffer/Uint8Array initialized blobs securely.
+            // Creating a JS polyfilled File interface directly over the native bytes
+            const b = contentBytes;
+            return {
+                name: this.name,
+                lastModified: Date.now(),
+                size: b.length,
+                type: 'application/octet-stream',
+                arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
+                text: async () => new TextDecoder().decode(b),
+                slice: (start?: number, end?: number, contentType?: string) => {
+                    const sliced = b.slice(start ?? 0, end ?? b.length);
+                    return {
+                        name: this.name,
+                        lastModified: Date.now(),
+                        size: sliced.length,
+                        type: contentType || '',
+                        arrayBuffer: async () => sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength),
+                        text: async () => new TextDecoder().decode(sliced)
+                    } as any;
+                },
+                stream: () => {
+                    if (typeof ReadableStream !== 'undefined') {
+                        return new ReadableStream({
+                            start(controller) {
+                                controller.enqueue(b);
+                                controller.close();
+                            }
+                        });
+                    }
+                    throw new Error('ReadableStream not supported');
+                }
+            } as unknown as File;
         }
-
-        const b = new Blob([contentBytes as any]);
-        (b as any).name = this.name;
-        (b as any).lastModified = Date.now();
-        return b as unknown as File;
     }
 
     async createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream> {
@@ -59,6 +94,12 @@ export class FileSystemFileHandle extends FileSystemHandle {
             } catch (e) {
                 // file doesn't exist or can't be read, start empty
             }
+        } else if (this.fileNode.exists) {
+            // Standard OPFS behavior: truncate file down to 0 bytes explicitly
+            this.fileNode.delete();
+            this.fileNode.create();
+        } else {
+            this.fileNode.create();
         }
         return new FileSystemWritableFileStream(this.path, initialBytes);
     }
@@ -203,9 +244,9 @@ export class FileSystemWritableFileStream {
         if (this.isClosed) throw new TypeError('Cannot create writer when WritableStream is locked');
 
         const file = new ExpoFile(this.path);
-        if (!file.exists) {
-            file.create();
-        }
+        if (file.exists) file.delete();
+        file.create();
+
         const openFile = file.open();
         openFile.writeBytes(this.buffer);
         openFile.close();
