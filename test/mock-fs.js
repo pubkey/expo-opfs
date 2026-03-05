@@ -32,6 +32,13 @@ export async function makeDirectoryAsync(path) {
 
 export async function deleteAsync(path) {
     _memFs.delete(path);
+    // Mimic recursive deletion for directories
+    const prefix = path.endsWith('/') ? path : (path + '/');
+    for (const key of _memFs.keys()) {
+        if (key.startsWith(prefix)) {
+            _memFs.delete(key);
+        }
+    }
 }
 
 export async function readDirectoryAsync(path) {
