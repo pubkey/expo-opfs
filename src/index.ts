@@ -1,54 +1,6 @@
-import * as FileSystem from 'expo-file-system/legacy';
-
-const OPFS_ROOT = FileSystem.documentDirectory + '.expo-opfs/';
-
-// Base64 lookup tables
-const b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-const b64lookup = new Uint8Array(256);
-for (let i = 0; i < b64chars.length; i++) {
-    b64lookup[b64chars.charCodeAt(i)] = i;
-}
-
-export function encodeBase64(bytes: Uint8Array): string {
-    let result = '';
-    const len = bytes.length;
-    for (let i = 0; i < len; i += 3) {
-        result += b64chars[bytes[i] >> 2];
-        result += b64chars[((bytes[i] & 3) << 4) | (bytes[i + 1] >> 4)];
-        result += b64chars[((bytes[i + 1] & 15) << 2) | (bytes[i + 2] >> 6)];
-        result += b64chars[bytes[i + 2] & 63];
-    }
-    if (len % 3 === 2) {
-        result = result.substring(0, result.length - 1) + '=';
-    } else if (len % 3 === 1) {
-        result = result.substring(0, result.length - 2) + '==';
-    }
-    return result;
-}
-
-export function decodeBase64(base64: string): Uint8Array {
-    let validLen = base64.indexOf('=');
-    if (validLen === -1) validLen = base64.length;
-    const placeHoldersLen = validLen === base64.length ? 0 : base64.length - validLen;
-    const str = base64.substring(0, validLen);
-    const len = str.length;
-
-    const bufferLength = Math.floor((base64.length * 3) / 4) - placeHoldersLen;
-    const bytes = new Uint8Array(bufferLength);
-
-    let p = 0;
-    for (let i = 0; i < len; i += 4) {
-        const encoded1 = b64lookup[base64.charCodeAt(i)];
-        const encoded2 = b64lookup[base64.charCodeAt(i + 1)];
-        const encoded3 = b64lookup[base64.charCodeAt(i + 2)];
-        const encoded4 = b64lookup[base64.charCodeAt(i + 3)];
-
-        bytes[p++] = (encoded1 << 2) | (encoded2 >> 4);
-        if (p < bufferLength) bytes[p++] = ((encoded2 & 15) << 4) | (encoded3 >> 2);
-        if (p < bufferLength) bytes[p++] = ((encoded3 & 3) << 6) | (encoded4 & 63);
-    }
-    return bytes;
-}
+import { File as ExpoFile, Directory as ExpoDirectory } from 'expo-file-system';
+import { documentDirectory } from 'expo-file-system/legacy';
+const OPFS_ROOT = new ExpoDirectory(documentDirectory + '.expo-opfs');
 
 export class FileSystemHandle {
     readonly kind: 'file' | 'directory';
@@ -75,25 +27,25 @@ export class FileSystemHandle {
 }
 
 export class FileSystemFileHandle extends FileSystemHandle {
+    private fileNode: ExpoFile;
+
     constructor(name: string, path: string) {
         super('file', name, path);
+        this.fileNode = new ExpoFile(path);
     }
 
     async getFile(): Promise<File> {
         let contentBytes: Uint8Array = new Uint8Array(0);
         try {
-            const b64 = await FileSystem.readAsStringAsync(this.path, { encoding: FileSystem.EncodingType.Base64 });
-            contentBytes = decodeBase64(b64);
+            contentBytes = await this.fileNode.bytes();
         } catch (e) {
             throw new DOMException('File could not be read', 'NotFoundError');
         }
 
-        // In environments where File is polyfilled (like Jest JSDOM via Blob), use it
         if (typeof File !== 'undefined') {
             return new File([contentBytes as any], this.name, { lastModified: Date.now() });
         }
 
-        // Fallback if no File global exists
         const b = new Blob([contentBytes as any]);
         (b as any).name = this.name;
         (b as any).lastModified = Date.now();
@@ -102,10 +54,9 @@ export class FileSystemFileHandle extends FileSystemHandle {
 
     async createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream> {
         let initialBytes: Uint8Array = new Uint8Array(0);
-        if (options?.keepExistingData) {
+        if (options?.keepExistingData && this.fileNode.exists) {
             try {
-                const b64 = await FileSystem.readAsStringAsync(this.path, { encoding: FileSystem.EncodingType.Base64 });
-                initialBytes = decodeBase64(b64);
+                initialBytes = await this.fileNode.bytes();
             } catch (e) {
                 // file doesn't exist or can't be read, start empty
             }
@@ -190,7 +141,18 @@ export class FileSystemWritableFileStream {
                     reader.onerror = reject;
                     reader.readAsDataURL(data);
                 });
-                bytes = decodeBase64(b64);
+
+                let binaryStr = '';
+                if (typeof atob === 'function') {
+                    binaryStr = atob(b64);
+                } else if (typeof Buffer !== 'undefined') {
+                    binaryStr = Buffer.from(b64, 'base64').toString('binary');
+                }
+
+                bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                }
             }
         } else if (ArrayBuffer.isView(data)) {
             bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -240,8 +202,15 @@ export class FileSystemWritableFileStream {
             throw new TypeError('Cannot close a ERRORED writable stream');
         }
         if (this.isClosed) throw new TypeError('Cannot create writer when WritableStream is locked');
-        const b64 = encodeBase64(this.buffer);
-        await FileSystem.writeAsStringAsync(this.path, b64, { encoding: FileSystem.EncodingType.Base64 });
+
+        const file = new ExpoFile(this.path);
+        if (!file.exists) {
+            file.create();
+        }
+        const openFile = file.open();
+        openFile.writeBytes(this.buffer);
+        openFile.close();
+
         this.isClosed = true;
     }
 
@@ -262,27 +231,28 @@ export class FileSystemWritableFileStream {
 }
 
 export class FileSystemDirectoryHandle extends FileSystemHandle {
+    private dirNode: ExpoDirectory;
+
     constructor(name: string, path: string) {
         super('directory', name, path);
+        this.dirNode = new ExpoDirectory(path);
     }
 
     async getFileHandle(name: string, options?: { create?: boolean }): Promise<FileSystemFileHandle> {
         const fullPath = this.path + name;
-        const dirPath = fullPath + '/';
+        const fileNode = new ExpoFile(fullPath);
+        const dirNode = new ExpoDirectory(fullPath);
 
-        const info = await FileSystem.getInfoAsync(fullPath);
-        const dirInfo = await FileSystem.getInfoAsync(dirPath);
-
-        if (dirInfo.exists && dirInfo.isDirectory) {
+        if (dirNode.exists) {
             throw new DOMException(`A directory with the same name exists: ${name}`, 'TypeMismatchError');
         }
 
-        if (info.exists) {
+        if (fileNode.exists) {
             return new FileSystemFileHandle(name, fullPath);
         }
 
         if (options?.create) {
-            await FileSystem.writeAsStringAsync(fullPath, '', { encoding: FileSystem.EncodingType.UTF8 });
+            fileNode.create();
             return new FileSystemFileHandle(name, fullPath);
         }
 
@@ -291,21 +261,19 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
 
     async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FileSystemDirectoryHandle> {
         const fullPath = this.path + name + '/';
-        const filePath = this.path + name;
+        const fullNode = new ExpoDirectory(fullPath);
+        const fileNode = new ExpoFile(this.path + name);
 
-        const info = await FileSystem.getInfoAsync(fullPath);
-        const fileInfo = await FileSystem.getInfoAsync(filePath);
-
-        if (fileInfo.exists && !fileInfo.isDirectory) {
+        if (fileNode.exists) {
             throw new DOMException(`A file with the same name exists: ${name}`, 'TypeMismatchError');
         }
 
-        if (info.exists) {
+        if (fullNode.exists) {
             return new FileSystemDirectoryHandle(name, fullPath);
         }
 
         if (options?.create) {
-            await FileSystem.makeDirectoryAsync(fullPath, { intermediates: true });
+            fullNode.create();
             return new FileSystemDirectoryHandle(name, fullPath);
         }
 
@@ -313,23 +281,23 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     }
 
     async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
-        const fileInfo = await FileSystem.getInfoAsync(this.path + name);
-        const dirInfo = await FileSystem.getInfoAsync(this.path + name + '/');
-        const targetInfo = fileInfo.exists ? fileInfo : dirInfo;
-        const fullPath = fileInfo.exists ? (this.path + name) : (this.path + name + '/');
+        const fullPath = this.path + name;
+        const fileNode = new ExpoFile(fullPath);
+        const dirNode = new ExpoDirectory(fullPath + '/');
 
-        if (!targetInfo.exists) {
+        if (!fileNode.exists && !dirNode.exists) {
             throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
         }
 
-        if (targetInfo.isDirectory && !options?.recursive) {
-            const contents = await FileSystem.readDirectoryAsync(fullPath);
+        if (dirNode.exists && !options?.recursive) {
+            const contents = dirNode.list();
             if (contents.length > 0) {
                 throw new DOMException('The object can not be modified in this way.', 'InvalidModificationError');
             }
         }
 
-        await FileSystem.deleteAsync(fullPath, { idempotent: true });
+        const target = fileNode.exists ? fileNode : dirNode;
+        target.delete();
     }
 
     async resolve(possibleDescendant: FileSystemHandle): Promise<string[] | null> {
@@ -337,7 +305,6 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
         if (!descendantPath.startsWith(this.path)) return null;
         if (descendantPath === this.path) return [];
 
-        // strip the root path off
         let relative = descendantPath.substring(this.path.length);
         if (relative.endsWith('/')) {
             relative = relative.slice(0, -1);
@@ -346,32 +313,22 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     }
 
     async *keys(): AsyncIterableIterator<string> {
-        const entries = await FileSystem.readDirectoryAsync(this.path);
+        const entries = this.dirNode.list();
         for (const entry of entries) {
-            yield entry;
+            yield entry.name;
         }
     }
 
     async *values(): AsyncIterableIterator<FileSystemHandle> {
-        const entries = await FileSystem.readDirectoryAsync(this.path);
+        const entries = this.dirNode.list();
         for (const entry of entries) {
-            if (entry === '.keep') continue; // Hide the polyfill directory marker
+            if (entry.name === '.keep') continue;
 
-            const entryPath = this.path + entry;
-            let info = await FileSystem.getInfoAsync(entryPath);
-            // In some environments, a directory might need a trailing slash to accurately return isDirectory. 
-            // In our JSDOM mock, it explicitly checks exact match. So we try the plain path first, then with trailing slash if not found/classified.
-            if (!info.exists) {
-                const dirInfo = await FileSystem.getInfoAsync(entryPath + '/');
-                if (dirInfo.exists) {
-                    info = dirInfo;
-                }
-            }
-
-            if (info.isDirectory) {
-                yield new FileSystemDirectoryHandle(entry, entryPath + '/');
+            // Expo entries represent themselves via type logic or we create handles dynamically
+            if (entry instanceof ExpoDirectory || (entry as any).isDirectory) {
+                yield new FileSystemDirectoryHandle(entry.name, entry.uri + '/');
             } else {
-                yield new FileSystemFileHandle(entry, entryPath);
+                yield new FileSystemFileHandle(entry.name, entry.uri);
             }
         }
     }
@@ -389,11 +346,10 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
 
 export const opfs = {
     getDirectory: async (): Promise<FileSystemDirectoryHandle> => {
-        const info = await FileSystem.getInfoAsync(OPFS_ROOT);
-        if (!info.exists) {
-            await FileSystem.makeDirectoryAsync(OPFS_ROOT, { intermediates: true });
+        if (!OPFS_ROOT.exists) {
+            OPFS_ROOT.create();
         }
-        return new FileSystemDirectoryHandle('', OPFS_ROOT);
+        return new FileSystemDirectoryHandle('', OPFS_ROOT.uri);
     }
 };
 
