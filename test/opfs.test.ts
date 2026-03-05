@@ -1409,6 +1409,60 @@ describe('OPFS', () => {
     expect(values.length).toBe(0);
   });
 
+  test('FileSystemSyncAccessHandle basic properties and write/read', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('sync-access.txt', { create: true });
+
+    // In native browser main thread, this doesn't exist. Only valid in Web Workers or our Polyfill
+    if (typeof (fh as any).createSyncAccessHandle !== 'function') {
+      return; // Skip natively in the browser main thread
+    }
+
+    const accessHandle = await (fh as any).createSyncAccessHandle();
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    // 1. Write sequentially
+    const writeBuffer1 = encoder.encode('Hello ');
+    const bytesWritten1 = accessHandle.write(writeBuffer1);
+    expect(bytesWritten1).toBe(6);
+    expect(accessHandle.getSize()).toBe(6);
+
+    const writeBuffer2 = encoder.encode('World');
+    const bytesWritten2 = accessHandle.write(writeBuffer2);
+    expect(bytesWritten2).toBe(5);
+    expect(accessHandle.getSize()).toBe(11); // 'Hello World'
+
+    // 2. Read
+    const readBuffer1 = new Uint8Array(5);
+    const readLength1 = accessHandle.read(readBuffer1, { at: 6 });
+    expect(readLength1).toBe(5);
+    expect(decoder.decode(readBuffer1)).toBe('World');
+
+    const readBuffer2 = new Uint8Array(20);
+    const readLength2 = accessHandle.read(readBuffer2, { at: 0 });
+    expect(readLength2).toBe(11);
+    expect(decoder.decode(readBuffer2.subarray(0, readLength2))).toBe('Hello World');
+
+    // 3. Truncate
+    accessHandle.truncate(5);
+    expect(accessHandle.getSize()).toBe(5);
+    const readBuffer3 = new Uint8Array(10);
+    const readLength3 = accessHandle.read(readBuffer3, { at: 0 });
+    expect(readLength3).toBe(5);
+    expect(decoder.decode(readBuffer3.subarray(0, readLength3))).toBe('Hello');
+
+    // 4. Flush & Close
+    accessHandle.flush();
+    accessHandle.close();
+
+    // Verify written data by standard async read
+    const file = await fh.getFile();
+    const text = await file.text();
+    expect(text).toBe('Hello');
+  });
+
 
   test('writer.closed resolves after close', async () => {
     const root = await navigator.storage.getDirectory();

@@ -15,10 +15,49 @@ const _memFs = new Map(); // stores entries as { isDir: boolean, data: Uint8Arra
 class ExpoFileHandleMock {
     constructor(path) {
         this.path = path;
+        this.offset = 0;
     }
+
+    get size() {
+        const entry = _memFs.get(this.path);
+        return entry ? entry.data.length : 0;
+    }
+
+    set size(newSize) {
+        const entry = _memFs.get(this.path);
+        if (entry) {
+            const newBuffer = new Uint8Array(newSize);
+            const copyLen = Math.min(newSize, entry.data.length);
+            newBuffer.set(entry.data.subarray(0, copyLen));
+            entry.data = newBuffer;
+        }
+    }
+
+    readBytes(length) {
+        const entry = _memFs.get(this.path);
+        if (!entry) throw new Error('File not open');
+        const available = Math.max(0, entry.data.length - this.offset);
+        const toRead = Math.min(length, available);
+        const chunk = entry.data.subarray(this.offset, this.offset + toRead);
+        this.offset += toRead;
+        return chunk;
+    }
+
     writeBytes(bytes) {
-        _memFs.set(this.path, { isDir: false, data: new Uint8Array(bytes) });
+        const entry = _memFs.get(this.path);
+        if (!entry) throw new Error('File not open');
+
+        const needed = this.offset + bytes.length;
+        if (needed > entry.data.length) {
+            const newBuffer = new Uint8Array(needed);
+            newBuffer.set(entry.data);
+            entry.data = newBuffer;
+        }
+
+        entry.data.set(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), this.offset);
+        this.offset += bytes.length;
     }
+
     close() { }
 }
 
@@ -40,6 +79,21 @@ export class File {
     async bytes() {
         if (!this.exists) throw new Error(`File not found: ${this.uri}`);
         return _memFs.get(this.uri).data;
+    }
+
+    bytesSync() {
+        if (!this.exists) throw new Error(`File not found: ${this.uri}`);
+        return _memFs.get(this.uri).data;
+    }
+
+    write(content) {
+        if (content instanceof Uint8Array) {
+            _memFs.set(this.uri, { isDir: false, data: new Uint8Array(content.buffer, content.byteOffset, content.byteLength) });
+        } else {
+            // naive string to u8
+            const encoder = new TextEncoder();
+            _memFs.set(this.uri, { isDir: false, data: encoder.encode(content) });
+        }
     }
 
     create() {

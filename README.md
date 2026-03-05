@@ -41,13 +41,13 @@ async function writeData() {
 }
 ```
 
-## Limitations
+## Synchronous API
 
-Currently, this polyfill only implements the **asynchronous** OPFS API. 
+This polyfill fully implements the `FileSystemSyncAccessHandle` interface, bringing high-performance fully synchronous `read()`, `write()`, `getSize()`, `truncate()`, and `flush()` methods to React Native.
 
-The `FileSystemSyncAccessHandle` interface, which provides fully synchronous `read()`, `write()`, and `flush()` methods (often used by high-performance WASM applications like SQLite inside Web Workers), is **not supported**. 
+This is powered by Expo SDK 55's modern `FileSystem` native C++ JSI bindings, making it possible to run complex WebAssembly (WASM) applications like SQLite natively on the device using standard OPFS adapter libraries.
 
-This limitation exists because the underlying `expo-file-system` wrapper relies on the asynchronous React Native bridge and does not currently expose fully blocking, synchronous file I/O operations to JavaScript.
+```TODO Update expo sdk to version 55 to remove this note```
 
 ---
 

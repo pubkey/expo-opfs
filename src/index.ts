@@ -112,6 +112,103 @@ export class FileSystemFileHandle extends FileSystemHandle {
         }
         return new FileSystemWritableFileStream(this.path, initialBytes);
     }
+
+    async createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle> {
+        if (!this.fileNode.exists) {
+            this.fileNode.create();
+        }
+        return new FileSystemSyncAccessHandle(this.fileNode.open(), this.fileNode);
+    }
+}
+
+export class FileSystemSyncAccessHandle {
+    private fileHandle: any;
+    private fileNode: any;
+    private isClosed: boolean = false;
+
+    constructor(fileHandle: any, fileNode: any) {
+        this.fileHandle = fileHandle;
+        this.fileNode = fileNode;
+    }
+
+    read(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
+        if (this.isClosed) throw new TypeError('Cannot read from a closed handle');
+        if (options?.at !== undefined) {
+            this.fileHandle.offset = options.at;
+        }
+
+        const view = new Uint8Array(
+            (buffer as ArrayBufferView).buffer || buffer,
+            (buffer as ArrayBufferView).byteOffset || 0,
+            (buffer as ArrayBufferView).byteLength || (buffer as ArrayBuffer).byteLength
+        );
+
+        const bytesToRead = view.byteLength;
+        const readData: Uint8Array = this.fileHandle.readBytes(bytesToRead);
+
+        view.set(readData);
+        return readData.length;
+    }
+
+    write(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
+        if (this.isClosed) throw new TypeError('Cannot write to a closed handle');
+        if (options?.at !== undefined) {
+            this.fileHandle.offset = options.at;
+        }
+
+        const view = new Uint8Array(
+            (buffer as ArrayBufferView).buffer || buffer,
+            (buffer as ArrayBufferView).byteOffset || 0,
+            (buffer as ArrayBufferView).byteLength || (buffer as ArrayBuffer).byteLength
+        );
+
+        this.fileHandle.writeBytes(view);
+        return view.length;
+    }
+
+    getSize(): number {
+        if (this.isClosed) throw new TypeError('Cannot get size of a closed handle');
+        return this.fileHandle.size;
+    }
+
+    truncate(newSize: number): void {
+        if (this.isClosed) throw new TypeError('Cannot truncate a closed handle');
+        if (newSize < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
+        if (newSize === this.fileHandle.size) return;
+
+        // Try to update natively/via mock natively
+        try {
+            this.fileHandle.size = newSize;
+        } catch (e) {
+            // Native read-only size assignment fallback
+        }
+
+        if (this.fileHandle.size !== newSize) {
+            // Fallback rewrite approach if native JSI size assignment is readonly
+            const currentOffset = this.fileHandle.offset;
+            this.fileHandle.offset = 0;
+            const fullData = this.fileHandle.readBytes(this.fileHandle.size);
+
+            const resized = new Uint8Array(newSize);
+            resized.set(fullData.subarray(0, Math.min(newSize, fullData.length)));
+
+            this.fileHandle.close();
+            this.fileNode.write(resized);
+            this.fileHandle = this.fileNode.open();
+            this.fileHandle.offset = Math.min(currentOffset, newSize);
+        }
+    }
+
+    flush(): void {
+        if (this.isClosed) throw new TypeError('Cannot flush a closed handle');
+        // Synchronous operations physically write to device natively in Expo SDK 55
+    }
+
+    close(): void {
+        if (this.isClosed) return;
+        this.fileHandle.close();
+        this.isClosed = true;
+    }
 }
 
 type WriteParams = {
