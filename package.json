@@ -13,14 +13,15 @@
   "license": "MIT",
   "author": "",
   "type": "commonjs",
-  "main": "index.js",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
   "scripts": {
     "build": "tsc",
     "test": "npm run test:browser && npm run test:expo",
     "test:watch": "jest --watch --verbose",
     "test:expo": "nyc jest --config jest.config.js",
     "test:browser": "nyc jest --config jest.config.browser.js",
-    "test:example": "cd example && npm start",
+    "test:example": "npm run build && cd example && npm start",
     "prepublishOnly": "npm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
@@ -31,8 +32,8 @@
     "@types/node": "^25.3.3",
     "babel-preset-expo": "^55.0.10",
     "eslint": "^10.0.2",
-    "expo": "^55.0.4",
-    "expo-file-system": "^55.0.10",
+    "expo": "*",
+    "expo-file-system": "*",
     "jest": "^29.7.0",
     "jest-expo": "^55.0.9",
     "nyc": "^18.0.0",
@@ -41,6 +42,7 @@
     "typescript-eslint": "^8.56.1"
   },
   "peerDependencies": {
-    "expo-file-system": "^55.0.10"
+    "expo-file-system": "^55.0.0",
+    "expo": "^55.0.0"
   }
 }

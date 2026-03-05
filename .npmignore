@@ -1,0 +1,21 @@
+# Development files
+.github/
+.nyc_output/
+coverage/
+src/
+test/
+example/
+jest.config.js
+jest.config.browser.js
+jest.setup.browser.js
+jest.setup.expo.js
+babel.config.js
+eslint.config.mjs
+tsconfig.json
+
+# Local envs
+.env
+.env.local
+
+# Build configs
+.npmrc
