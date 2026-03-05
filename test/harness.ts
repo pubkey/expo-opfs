@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment, @typescript-eslint/no-require-imports */
+/* eslint-disable @typescript-eslint/no-require-imports */
 export type TestFn = () => Promise<void> | void;
 export type DescribeFn = () => void;
 export type HookFn = () => Promise<void> | void;
