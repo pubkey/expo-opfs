@@ -10,6 +10,12 @@ if (typeof globalThis.DOMException === 'undefined') {
     };
 }
 
+function isValidName(name: string): boolean {
+    return name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\');
+}
+
+const lockedFiles = new Set<string>();
+
 export class FileSystemHandle {
     readonly kind: 'file' | 'directory';
     readonly name: string;
@@ -96,6 +102,7 @@ export class FileSystemFileHandle extends FileSystemHandle {
     }
 
     async createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream> {
+        if (lockedFiles.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
         let initialBytes: Uint8Array = new Uint8Array(0);
         if (options?.keepExistingData && this.fileNode.exists) {
             try {
@@ -110,14 +117,19 @@ export class FileSystemFileHandle extends FileSystemHandle {
         } else {
             this.fileNode.create();
         }
-        return new FileSystemWritableFileStream(this.path, initialBytes);
+
+        lockedFiles.add(this.path);
+        return new FileSystemWritableFileStream(this.path, initialBytes, () => lockedFiles.delete(this.path));
     }
 
     async createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle> {
+        if (lockedFiles.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
         if (!this.fileNode.exists) {
             this.fileNode.create();
         }
-        return new FileSystemSyncAccessHandle(this.fileNode.open(), this.fileNode);
+
+        lockedFiles.add(this.path);
+        return new FileSystemSyncAccessHandle(this.fileNode.open(), this.fileNode, () => lockedFiles.delete(this.path));
     }
 }
 
@@ -125,10 +137,12 @@ export class FileSystemSyncAccessHandle {
     private fileHandle: any;
     private fileNode: any;
     private isClosed: boolean = false;
+    private onClose: () => void;
 
-    constructor(fileHandle: any, fileNode: any) {
+    constructor(fileHandle: any, fileNode: any, onClose: () => void) {
         this.fileHandle = fileHandle;
         this.fileNode = fileNode;
+        this.onClose = onClose;
     }
 
     read(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
@@ -143,8 +157,22 @@ export class FileSystemSyncAccessHandle {
             (buffer as ArrayBufferView).byteLength || (buffer as ArrayBuffer).byteLength
         );
 
+        const currentSize = this.getSize();
+        const currentOffset = this.fileHandle.offset;
+
+        if (currentOffset >= currentSize) {
+            return 0; // EOF reached, nothing to read
+        }
+
         const bytesToRead = view.byteLength;
-        const readData: Uint8Array = this.fileHandle.readBytes(bytesToRead);
+        const available = Math.max(0, currentSize - currentOffset);
+        const actualBytesToRead = Math.min(bytesToRead, available);
+
+        if (actualBytesToRead <= 0) {
+            return 0;
+        }
+
+        const readData: Uint8Array = this.fileHandle.readBytes(actualBytesToRead);
 
         view.set(readData);
         return readData.length;
@@ -161,6 +189,18 @@ export class FileSystemSyncAccessHandle {
             (buffer as ArrayBufferView).byteOffset || 0,
             (buffer as ArrayBufferView).byteLength || (buffer as ArrayBuffer).byteLength
         );
+
+        const currentSize = this.getSize();
+        if (this.fileHandle.offset > currentSize) {
+            // Native systems may not zero-pad implicitly if we seek beyond EOF
+            const padLen = this.fileHandle.offset - currentSize;
+            const padding = new Uint8Array(padLen);
+            const targetOffset = this.fileHandle.offset;
+
+            this.fileHandle.offset = currentSize;
+            this.fileHandle.writeBytes(padding);
+            this.fileHandle.offset = targetOffset;
+        }
 
         this.fileHandle.writeBytes(view);
         return view.length;
@@ -208,6 +248,7 @@ export class FileSystemSyncAccessHandle {
         if (this.isClosed) return;
         this.fileHandle.close();
         this.isClosed = true;
+        this.onClose();
     }
 }
 
@@ -225,10 +266,12 @@ export class FileSystemWritableFileStream {
     private isClosed: boolean = false;
     private isErrored: boolean = false;
     private _errorReason: any = null;
+    private onClose: () => void;
 
-    constructor(path: string, initialBytes: Uint8Array) {
+    constructor(path: string, initialBytes: Uint8Array, onClose: () => void) {
         this.path = path;
         this.buffer = new Uint8Array(initialBytes);
+        this.onClose = onClose;
     }
 
     async write(data: string | BufferSource | Blob | WriteParams): Promise<void> {
@@ -358,6 +401,7 @@ export class FileSystemWritableFileStream {
         openFile.close();
 
         this.isClosed = true;
+        this.onClose();
     }
 
     getWriter() {
@@ -371,8 +415,13 @@ export class FileSystemWritableFileStream {
     }
 
     async abort(reason?: any): Promise<void> {
+        if (this.isErrored) return;
         this.isErrored = true;
         this._errorReason = reason ?? new TypeError('Stream was aborted');
+        if (!this.isClosed) {
+            this.isClosed = true;
+            this.onClose();
+        }
     }
 }
 
@@ -385,6 +434,7 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     }
 
     async getFileHandle(name: string, options?: { create?: boolean }): Promise<FileSystemFileHandle> {
+        if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name;
         const fileNode = new ExpoFile(fullPath);
         const dirNode = new ExpoDirectory(fullPath);
@@ -406,6 +456,7 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     }
 
     async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FileSystemDirectoryHandle> {
+        if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name + '/';
         const fullNode = new ExpoDirectory(fullPath);
         const fileNode = new ExpoFile(this.path + name);
@@ -427,6 +478,7 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     }
 
     async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
+        if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name;
         const fileNode = new ExpoFile(fullPath);
         const dirNode = new ExpoDirectory(fullPath + '/');

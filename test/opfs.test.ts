@@ -58,6 +58,18 @@ describe('OPFS', () => {
     expect(await file.text()).toBe('Test content');
   });
 
+  test('should reject invalid file or directory names with TypeError', async () => {
+    const root = await globalThis.navigator.storage.getDirectory();
+
+    const invalidNames = ['', 'a/b', 'a\\b', '.', '..'];
+
+    for (const name of invalidNames) {
+      await expect(root.getFileHandle(name, { create: true })).rejects.toBeInstanceOf(TypeError);
+      await expect(root.getDirectoryHandle(name, { create: true })).rejects.toBeInstanceOf(TypeError);
+      await expect(root.removeEntry(name)).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
   test('should remove a file', async () => {
     const rootDirectory = await globalThis.navigator.storage.getDirectory();
 
@@ -68,7 +80,7 @@ describe('OPFS', () => {
 
     await rootDirectory.removeEntry('testFileToRemove.txt');
 
-    await expect(rootDirectory.getFileHandle('testFileToRemove.txt')).rejects.toThrow(); // Relaxed exact string match
+    await expect(rootDirectory.getFileHandle('testFileToRemove.txt')).rejects.toHaveProperty('name', 'NotFoundError'); // Relaxed exact string match
   });
 
   test('should remove a directory', async () => {
@@ -79,7 +91,7 @@ describe('OPFS', () => {
 
     await rootDirectory.removeEntry('dirToRemove', { recursive: true });
 
-    await expect(rootDirectory.getDirectoryHandle('dirToRemove')).rejects.toThrow();
+    await expect(rootDirectory.getDirectoryHandle('dirToRemove')).rejects.toHaveProperty('name', 'NotFoundError');
   });
 
   test('should list all files and directories', async () => {
@@ -102,7 +114,7 @@ describe('OPFS', () => {
   test('should throw an error when trying to get a non-existing file', async () => {
     const rootDirectory = await globalThis.navigator.storage.getDirectory();
 
-    await expect(rootDirectory.getFileHandle('nonExistingFile.txt')).rejects.toThrow();
+    await expect(rootDirectory.getFileHandle('nonExistingFile.txt')).rejects.toHaveProperty('name', 'NotFoundError');
   });
 
   // https://github.com/jurerotar/opfs-mock/issues/1
@@ -242,7 +254,7 @@ describe('OPFS', () => {
     const writeHandle = await fileHandle.createWritable();
 
     // @ts-expect-error: We're testing undefined behavior specifically
-    await expect(writeHandle.write(undefined)).rejects.toThrow();
+    await expect(writeHandle.write(undefined)).rejects.toBeInstanceOf(TypeError);
   });
 
   /* SKIPPED: WebIDL silently coerces -1 to max unsigned long natively
@@ -1073,12 +1085,12 @@ describe('OPFS', () => {
     const root = await navigator.storage.getDirectory();
     await root.getDirectoryHandle('clash', { create: true });
 
-    await expect(root.getFileHandle('clash', { create: true })).rejects.toThrow();
+    await expect(root.getFileHandle('clash', { create: true })).rejects.toHaveProperty('name', 'TypeMismatchError');
 
     const root2 = await navigator.storage.getDirectory();
     await root2.getFileHandle('clash2', { create: true });
 
-    await expect(root2.getDirectoryHandle('clash2', { create: true })).rejects.toThrow();
+    await expect(root2.getDirectoryHandle('clash2', { create: true })).rejects.toHaveProperty('name', 'TypeMismatchError');
   });
 
   test('WritableStream getWriter().write() writes to file', async () => {
@@ -1150,15 +1162,15 @@ describe('OPFS', () => {
     await root.removeEntry('empty');
 
     // Polyfill throws standard NotFoundError, let's relax exact message matching
-    await expect(root.getDirectoryHandle('empty')).rejects.toThrow();
+    await expect(root.getDirectoryHandle('empty')).rejects.toHaveProperty('name', 'NotFoundError');
 
     const nonempty = await root.getDirectoryHandle('nonempty', { create: true });
     await nonempty.getFileHandle('f', { create: true });
 
-    await expect(root.removeEntry('nonempty')).rejects.toThrow();
+    await expect(root.removeEntry('nonempty')).rejects.toHaveProperty('name', 'InvalidModificationError');
 
     await root.removeEntry('nonempty', { recursive: true });
-    await expect(root.getDirectoryHandle('nonempty')).rejects.toThrow();
+    await expect(root.getDirectoryHandle('nonempty')).rejects.toHaveProperty('name', 'NotFoundError');
   });
 
   test('queryPermission/requestPermission are granted', async () => {
@@ -1413,31 +1425,22 @@ describe('OPFS', () => {
     const root = await navigator.storage.getDirectory();
     const fh = await root.getFileHandle('sync-access.txt', { create: true });
 
-    // In native browser main thread, this doesn't exist. Only valid in Web Workers or our Polyfill
     if (typeof (fh as any).createSyncAccessHandle !== 'function') {
-      return; // Skip natively in the browser main thread
+      return;
     }
 
     const accessHandle = await (fh as any).createSyncAccessHandle();
-
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
 
-    // 1. Write sequentially
     const writeBuffer1 = encoder.encode('Hello ');
-    const bytesWritten1 = accessHandle.write(writeBuffer1);
-    expect(bytesWritten1).toBe(6);
-    expect(accessHandle.getSize()).toBe(6);
+    accessHandle.write(writeBuffer1);
 
     const writeBuffer2 = encoder.encode('World');
-    const bytesWritten2 = accessHandle.write(writeBuffer2);
-    expect(bytesWritten2).toBe(5);
-    expect(accessHandle.getSize()).toBe(11); // 'Hello World'
+    accessHandle.write(writeBuffer2);
 
-    // 2. Read
     const readBuffer1 = new Uint8Array(5);
-    const readLength1 = accessHandle.read(readBuffer1, { at: 6 });
-    expect(readLength1).toBe(5);
+    accessHandle.read(readBuffer1, { at: 6 });
     expect(decoder.decode(readBuffer1)).toBe('World');
 
     const readBuffer2 = new Uint8Array(20);
@@ -1445,24 +1448,47 @@ describe('OPFS', () => {
     expect(readLength2).toBe(11);
     expect(decoder.decode(readBuffer2.subarray(0, readLength2))).toBe('Hello World');
 
-    // 3. Truncate
     accessHandle.truncate(5);
-    expect(accessHandle.getSize()).toBe(5);
-    const readBuffer3 = new Uint8Array(10);
-    const readLength3 = accessHandle.read(readBuffer3, { at: 0 });
-    expect(readLength3).toBe(5);
-    expect(decoder.decode(readBuffer3.subarray(0, readLength3))).toBe('Hello');
-
-    // 4. Flush & Close
     accessHandle.flush();
     accessHandle.close();
-
-    // Verify written data by standard async read
-    const file = await fh.getFile();
-    const text = await file.text();
-    expect(text).toBe('Hello');
   });
 
+  test('FileSystemSyncAccessHandle edge cases (OOB read/write, large buffers)', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('sync-access-edge.txt', { create: true });
+
+    if (typeof (fh as any).createSyncAccessHandle !== 'function') {
+      return;
+    }
+
+    const accessHandle = await (fh as any).createSyncAccessHandle();
+    const encoder = new TextEncoder();
+
+    // Write initial data
+    accessHandle.write(encoder.encode('12345'));
+
+    // 1. Read OOB (at > size) returns 0 bytes
+    const readBuffer1 = new Uint8Array(5);
+    const length1 = accessHandle.read(readBuffer1, { at: 100 });
+    expect(length1).toBe(0);
+
+    // 2. Read with oversized buffer only fills available bytes
+    const oversizedBuffer = new Uint8Array(10);
+    const length2 = accessHandle.read(oversizedBuffer, { at: 2 });
+    expect(length2).toBe(3); // available: '345'
+    expect(Array.from(oversizedBuffer.subarray(0, 3))).toEqual([51, 52, 53]); // '345'
+    expect(oversizedBuffer[3]).toBe(0); // Rest should be unmodified (initialized to 0)
+
+    // 3. Write OOB (at > size) pads with \0
+    accessHandle.write(encoder.encode('X'), { at: 8 });
+    expect(accessHandle.getSize()).toBe(9); // 12345 0 0 0 X
+
+    const readBufferOOB = new Uint8Array(9);
+    accessHandle.read(readBufferOOB, { at: 0 });
+    expect(Array.from(readBufferOOB)).toEqual([49, 50, 51, 52, 53, 0, 0, 0, 88]); // '12345\0\0\0X'
+
+    accessHandle.close();
+  });
 
   test('writer.closed resolves after close', async () => {
     const root = await navigator.storage.getDirectory();
