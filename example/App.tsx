@@ -6,6 +6,7 @@ import { applyPolyfill } from 'expo-opfs';
 import { registeredSuites } from '../test/harness';
 import '../test/opfs.test';
 import '../test/parallel.test';
+import '../test/performance.test';
 
 export default function App() {
   const [logs, setLogs] = useState<string[]>([]);

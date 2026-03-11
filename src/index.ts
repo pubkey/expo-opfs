@@ -119,7 +119,7 @@ export class FileSystemFileHandle extends FileSystemHandle {
         }
 
         lockedFiles.add(this.path);
-        return new FileSystemWritableFileStream(this.path, initialBytes, () => lockedFiles.delete(this.path));
+        return new FileSystemWritableFileStream(this.path, options?.keepExistingData ?? false, () => lockedFiles.delete(this.path));
     }
 
     async createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle> {
@@ -261,17 +261,48 @@ type WriteParams = {
 
 export class FileSystemWritableFileStream {
     private path: string;
-    private buffer: Uint8Array;
+    private fileNode: ExpoFile;
+    private swapNode: ExpoFile;
+    private fileHandle: any = null; // Expo FileHandle
     private cursor: number = 0;
     private isClosed: boolean = false;
     private isErrored: boolean = false;
     private _errorReason: any = null;
     private onClose: () => void;
+    private keepExistingData: boolean;
 
-    constructor(path: string, initialBytes: Uint8Array, onClose: () => void) {
+    constructor(path: string, keepExistingData: boolean, onClose: () => void) {
         this.path = path;
-        this.buffer = new Uint8Array(initialBytes);
+        this.fileNode = new ExpoFile(path);
+
+        // OPFS requires atomic writes.
+        // We stream to a swap file to prevent partial writes from being visible
+        // before close() is called.
+        this.swapNode = new ExpoFile(path + '.swap');
+
+        this.keepExistingData = keepExistingData;
         this.onClose = onClose;
+    }
+
+    private lazyInit() {
+        if (!this.fileHandle) {
+            if (this.swapNode.exists) {
+                this.swapNode.delete();
+            }
+            this.swapNode.create();
+
+            if (this.keepExistingData && this.fileNode.exists) {
+                // Copy existing data into the swap file if we are keeping it
+                const existingHandle = this.fileNode.open();
+                const swapHandle = this.swapNode.open();
+                const data = existingHandle.readBytes(existingHandle.size ?? 0);
+                swapHandle.writeBytes(data);
+                existingHandle.close();
+                swapHandle.close();
+            }
+
+            this.fileHandle = this.swapNode.open();
+        }
     }
 
     async write(data: string | BufferSource | Blob | WriteParams): Promise<void> {
@@ -351,15 +382,9 @@ export class FileSystemWritableFileStream {
             throw new TypeError('Invalid data type');
         }
 
-        const neededSize = this.cursor + bytes.length;
-        let newBuffer = this.buffer;
-        if (neededSize > this.buffer.length) {
-            newBuffer = new Uint8Array(neededSize);
-            newBuffer.set(this.buffer);
-        }
-
-        newBuffer.set(bytes, this.cursor);
-        this.buffer = newBuffer;
+        this.lazyInit();
+        this.fileHandle.offset = this.cursor;
+        this.fileHandle.writeBytes(bytes);
         this.cursor += bytes.length;
     }
 
@@ -367,12 +392,29 @@ export class FileSystemWritableFileStream {
         if (this.isErrored) throw this._errorReason ?? new TypeError('Stream is errored');
         if (this.isClosed) throw new TypeError('Stream is closed');
         if (size < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
-        if (size === this.buffer.length) return;
+        this.lazyInit();
 
-        const newBuffer = new Uint8Array(size);
-        const copyLen = Math.min(size, this.buffer.length);
-        newBuffer.set(this.buffer.subarray(0, copyLen));
-        this.buffer = newBuffer;
+        const currentSize = this.fileHandle.size;
+        if (size === currentSize) return;
+
+        try {
+            this.fileHandle.size = size;
+        } catch (e) {
+            // Fallback if size assignment is readonly in some Expo SDKs
+        }
+
+        if (this.fileHandle.size !== size) {
+            const currentOffset = this.fileHandle.offset;
+            this.fileHandle.offset = 0;
+            const fullData = this.fileHandle.readBytes(this.fileHandle.size);
+            const resized = new Uint8Array(size);
+            resized.set(fullData.subarray(0, Math.min(size, fullData.length)));
+
+            this.fileHandle.close();
+            this.swapNode.write(resized);
+            this.fileHandle = this.swapNode.open();
+            this.fileHandle.offset = Math.min(currentOffset, size);
+        }
 
         if (this.cursor > size) {
             this.cursor = size;
@@ -392,13 +434,34 @@ export class FileSystemWritableFileStream {
         }
         if (this.isClosed) throw new TypeError('Cannot create writer when WritableStream is locked');
 
-        const file = new ExpoFile(this.path);
-        if (file.exists) file.delete();
-        file.create();
+        if (this.fileHandle) {
+            this.fileHandle.close();
 
-        const openFile = file.open();
-        openFile.writeBytes(this.buffer);
-        openFile.close();
+            // Atomic commit: move swap file over the original file
+            if (this.fileNode.exists) {
+                this.fileNode.delete();
+            }
+            // Workaround for expo-file-system lack of synchronous move:
+            // Read swap file completely and write to the target natively
+            const swapHandle = this.swapNode.open();
+            const finalData = swapHandle.readBytes(swapHandle.size ?? 0);
+            swapHandle.close();
+
+            this.fileNode.create();
+            const finalHandle = this.fileNode.open();
+            finalHandle.writeBytes(finalData);
+            finalHandle.close();
+
+            this.swapNode.delete();
+        } else {
+            // Zero-byte file that was created and immediately closed
+            if (!this.fileNode.exists) {
+                this.fileNode.create();
+            } else if (!this.keepExistingData) {
+                this.fileNode.delete();
+                this.fileNode.create();
+            }
+        }
 
         this.isClosed = true;
         this.onClose();
@@ -418,6 +481,14 @@ export class FileSystemWritableFileStream {
         if (this.isErrored) return;
         this.isErrored = true;
         this._errorReason = reason ?? new TypeError('Stream was aborted');
+
+        if (this.fileHandle) {
+            try { this.fileHandle.close(); } catch (e) { }
+        }
+        if (this.swapNode.exists) {
+            try { this.swapNode.delete(); } catch (e) { }
+        }
+
         if (!this.isClosed) {
             this.isClosed = true;
             this.onClose();
@@ -437,14 +508,14 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
         if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name;
         const fileNode = new ExpoFile(fullPath);
-        const dirNode = new ExpoDirectory(fullPath);
-
-        if (dirNode.exists) {
-            throw new DOMException(`A directory with the same name exists: ${name}`, 'TypeMismatchError');
-        }
 
         if (fileNode.exists) {
             return new FileSystemFileHandle(name, fullPath);
+        }
+
+        const dirNode = new ExpoDirectory(fullPath);
+        if (dirNode.exists) {
+            throw new DOMException(`A directory with the same name exists: ${name}`, 'TypeMismatchError');
         }
 
         if (options?.create) {
@@ -459,14 +530,14 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
         if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name + '/';
         const fullNode = new ExpoDirectory(fullPath);
-        const fileNode = new ExpoFile(this.path + name);
-
-        if (fileNode.exists) {
-            throw new DOMException(`A file with the same name exists: ${name}`, 'TypeMismatchError');
-        }
 
         if (fullNode.exists) {
             return new FileSystemDirectoryHandle(name, fullPath);
+        }
+
+        const fileNode = new ExpoFile(this.path + name);
+        if (fileNode.exists) {
+            throw new DOMException(`A file with the same name exists: ${name}`, 'TypeMismatchError');
         }
 
         if (options?.create) {
@@ -480,34 +551,37 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
     async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
         if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name;
-        const fileNode = new ExpoFile(fullPath);
-        const dirNode = new ExpoDirectory(fullPath + '/');
-
-        if (!fileNode.exists && !dirNode.exists) {
-            throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
-        }
 
         if (lockedFiles.has(fullPath)) {
             throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
         }
 
-        if (dirNode.exists && options?.recursive) {
+        const fileNode = new ExpoFile(fullPath);
+        if (fileNode.exists) {
+            fileNode.delete();
+            lockedFiles.delete(fullPath);
+            return;
+        }
+
+        const dirNode = new ExpoDirectory(fullPath + '/');
+        if (!dirNode.exists) {
+            throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
+        }
+
+        if (options?.recursive) {
             for (const lockedPath of lockedFiles) {
                 if (lockedPath.startsWith(fullPath + '/')) {
                     throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
                 }
             }
-        }
-
-        if (dirNode.exists && !options?.recursive) {
+        } else {
             const contents = dirNode.list();
             if (contents.length > 0) {
                 throw new DOMException('The object can not be modified in this way.', 'InvalidModificationError');
             }
         }
 
-        const target = fileNode.exists ? fileNode : dirNode;
-        target.delete();
+        dirNode.delete();
         lockedFiles.delete(fullPath);
     }
 
