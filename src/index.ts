@@ -75,16 +75,18 @@ export class FileSystemFileHandle extends FileSystemHandle {
                 type,
                 arrayBuffer: async () => {
                     if (length === 0) return new ArrayBuffer(0);
-                    if (!state.handle) state.handle = node.open();
-                    state.handle.offset = startOffset;
-                    const data = state.handle.readBytes(length);
+                    const handle = node.open();
+                    handle.offset = startOffset;
+                    const data = handle.readBytes(length);
+                    handle.close();
                     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
                 },
                 text: async () => {
                     if (length === 0) return '';
-                    if (!state.handle) state.handle = node.open();
-                    state.handle.offset = startOffset;
-                    const data = state.handle.readBytes(length);
+                    const handle = node.open();
+                    handle.offset = startOffset;
+                    const data = handle.readBytes(length);
+                    handle.close();
                     return new TextDecoder().decode(data);
                 },
                 slice: (start?: number, end?: number, contentType?: string) => {
@@ -102,21 +104,25 @@ export class FileSystemFileHandle extends FileSystemHandle {
                                     controller.close();
                                     return;
                                 }
-                                if (!state.handle) state.handle = node.open();
-                                state.handle.offset = startOffset;
+                                const handle = node.open();
+                                handle.offset = startOffset;
 
                                 const CHUNK_SIZE = 64 * 1024; // 64KB chunks
                                 let bytesRead = 0;
-                                while (bytesRead < length) {
-                                    const chunkLength = Math.min(CHUNK_SIZE, length - bytesRead);
-                                    const data = state.handle.readBytes(chunkLength);
-                                    controller.enqueue(data);
-                                    bytesRead += chunkLength;
+                                try {
+                                    while (bytesRead < length) {
+                                        const chunkLength = Math.min(CHUNK_SIZE, length - bytesRead);
+                                        const data = handle.readBytes(chunkLength);
+                                        controller.enqueue(data);
+                                        bytesRead += chunkLength;
 
-                                    // Yield to event loop every few chunks for large files
-                                    if (bytesRead % (CHUNK_SIZE * 16) === 0) {
-                                        await new Promise(resolve => setTimeout(resolve, 0));
+                                        // Yield to event loop every few chunks for large files
+                                        if (bytesRead % (CHUNK_SIZE * 16) === 0) {
+                                            await new Promise(resolve => setTimeout(resolve, 0));
+                                        }
                                     }
+                                } finally {
+                                    handle.close();
                                 }
                                 controller.close();
                             }
@@ -465,37 +471,39 @@ export class FileSystemWritableFileStream {
         }
         if (this.isClosed) throw new TypeError('Cannot create writer when WritableStream is locked');
 
-        if (this.fileHandle) {
-            this.fileHandle.close();
+        try {
+            if (this.fileHandle) {
+                this.fileHandle.close();
 
-            // Atomic commit: move swap file over the original file
-            if (this.fileNode.exists) {
-                this.fileNode.delete();
-            }
-            // Workaround for expo-file-system lack of synchronous move:
-            // Read swap file completely and write to the target natively
-            const swapHandle = this.swapNode.open();
-            const finalData = swapHandle.readBytes(swapHandle.size ?? 0);
-            swapHandle.close();
+                // Atomic commit: move swap file over the original file
+                if (this.fileNode.exists) {
+                    this.fileNode.delete();
+                }
+                // Workaround for expo-file-system lack of synchronous move:
+                // Read swap file completely and write to the target natively
+                const swapHandle = this.swapNode.open();
+                const finalData = swapHandle.readBytes(swapHandle.size ?? 0);
+                swapHandle.close();
 
-            this.fileNode.create();
-            const finalHandle = this.fileNode.open();
-            finalHandle.writeBytes(finalData);
-            finalHandle.close();
-
-            this.swapNode.delete();
-        } else {
-            // Zero-byte file that was created and immediately closed
-            if (!this.fileNode.exists) {
                 this.fileNode.create();
-            } else if (!this.keepExistingData) {
-                this.fileNode.delete();
-                this.fileNode.create();
+                const finalHandle = this.fileNode.open();
+                finalHandle.writeBytes(finalData);
+                finalHandle.close();
+
+                this.swapNode.delete();
+            } else {
+                // Zero-byte file that was created and immediately closed
+                if (!this.fileNode.exists) {
+                    this.fileNode.create();
+                } else if (!this.keepExistingData) {
+                    this.fileNode.delete();
+                    this.fileNode.create();
+                }
             }
+        } finally {
+            this.isClosed = true;
+            this.onClose();
         }
-
-        this.isClosed = true;
-        this.onClose();
     }
 
     getWriter() {

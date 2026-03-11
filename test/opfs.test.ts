@@ -253,8 +253,12 @@ describe('OPFS', () => {
     const fileHandle = await rootDirectory.getFileHandle('writeError.txt', { create: true });
     const writeHandle = await fileHandle.createWritable();
 
-    // @ts-expect-error: We're testing undefined behavior specifically
-    await expect(writeHandle.write(undefined)).rejects.toBeInstanceOf(TypeError);
+    try {
+      // @ts-expect-error: We're testing undefined behavior specifically
+      await expect(writeHandle.write(undefined)).rejects.toBeInstanceOf(TypeError);
+    } finally {
+      await writeHandle.close().catch(() => { });
+    }
   });
 
   /* SKIPPED: WebIDL silently coerces -1 to max unsigned long natively
@@ -1354,8 +1358,12 @@ describe('OPFS', () => {
     const root = await navigator.storage.getDirectory();
     const fh = await root.getFileHandle('undefined-write.txt', { create: true });
     const stream = await fh.createWritable();
-    // @ts-expect-error invalid on purpose
-    await expect(stream.write(undefined)).rejects.toBeInstanceOf(TypeError);
+    try {
+      // @ts-expect-error invalid on purpose
+      await expect(stream.write(undefined)).rejects.toBeInstanceOf(TypeError);
+    } finally {
+      await stream.close().catch(() => { });
+    }
   });
 
   /* SKIPPED: Chromium errors the writable stream when passed invalid data null, preventing valid close()
@@ -1375,8 +1383,12 @@ describe('OPFS', () => {
     const root = await navigator.storage.getDirectory();
     const fh = await root.getFileHandle('legacy-invalid.txt', { create: true });
     const stream = await fh.createWritable();
-    // @ts-expect-error invalid on purpose
-    await expect(stream.write({ data: 123 })).rejects.toBeInstanceOf(TypeError);
+    try {
+      // @ts-expect-error invalid on purpose
+      await expect(stream.write({ data: 123 })).rejects.toBeInstanceOf(TypeError);
+    } finally {
+      await stream.close().catch(() => { });
+    }
   });
 
   test('getDirectoryHandle without create rejects NotFoundError', async () => {

@@ -184,4 +184,39 @@ describe('OPFS Parallel Operations', () => {
         }
         expect(keys.length).toBe(0);
     });
+    test('should release lock even if file writer close() throws an error', async () => {
+        const root = await navigator.storage.getDirectory();
+        const fileHandle = await root.getFileHandle('error-close-leak.txt', { create: true });
+
+        const writer = await fileHandle.createWritable();
+
+        // Mock a failure in the underlying FileNode delete to throw an exception during close()
+        // If writer.fileNode is undefined, we are running natively.
+        let originalDelete: any;
+        if ((writer as any).fileNode) {
+            originalDelete = (writer as any).fileNode.delete;
+            (writer as any).fileNode.delete = () => { throw new Error('Simulated native deletion error'); };
+        }
+
+        try {
+            await writer.close();
+        } catch (e: any) {
+            if ((writer as any).fileNode) {
+                expect(e.message).toBe('Simulated native deletion error');
+            }
+        }
+
+        if ((writer as any).fileNode) {
+            // Restore
+            (writer as any).fileNode.delete = originalDelete;
+        }
+
+        // This used to throw NoModificationAllowedError because the lock was never released
+        const newWriter = await fileHandle.createWritable();
+        await newWriter.write('Recovered and successful');
+        await newWriter.close();
+
+        const file = await fileHandle.getFile();
+        expect(await file.text()).toBe('Recovered and successful');
+    });
 });
