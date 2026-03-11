@@ -49,48 +49,65 @@ export class FileSystemFileHandle extends FileSystemHandle {
     }
 
     async getFile(): Promise<File> {
-        let contentBytes: Uint8Array = new Uint8Array(0);
-        try {
-            contentBytes = await this.fileNode.bytes();
-        } catch (e) {
+        let size: number = 0;
+        const lastModified: number = Date.now();
+
+        if (!this.fileNode.exists) {
             throw new DOMException('File could not be read', 'NotFoundError');
         }
 
         try {
-            if (typeof File !== 'undefined') {
-                return new File([contentBytes as any], this.name, { lastModified: Date.now() });
-            }
-            const b = new Blob([contentBytes as any]);
-            (b as any).name = this.name;
-            (b as any).lastModified = Date.now();
-            return b as unknown as File;
-        } catch (e: any) {
-            // React Native's Blob constructor does not support ArrayBuffer/Uint8Array initialized blobs securely.
-            // Creating a JS polyfilled File interface directly over the native bytes
-            const b = contentBytes;
+            const handle = this.fileNode.open();
+            size = handle.size ?? 0;
+            // Native Expo fileHandle doesn't expose lastModified yet, so grab current Date
+            handle.close();
+        } catch (e) {
+            throw new DOMException('File could not be read', 'NotFoundError');
+        }
+
+        const createLazyFile = (node: ExpoFile, startOffset: number, length: number, name: string, lastModified: number, type: string) => {
             return {
-                name: this.name,
-                lastModified: Date.now(),
-                size: b.length,
-                type: 'application/octet-stream',
-                arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
-                text: async () => new TextDecoder().decode(b),
+                name,
+                lastModified,
+                size: length,
+                type,
+                arrayBuffer: async () => {
+                    if (length === 0) return new ArrayBuffer(0);
+                    const handle = node.open();
+                    handle.offset = startOffset;
+                    const data = handle.readBytes(length);
+                    handle.close();
+                    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+                },
+                text: async () => {
+                    if (length === 0) return '';
+                    const handle = node.open();
+                    handle.offset = startOffset;
+                    const data = handle.readBytes(length);
+                    handle.close();
+                    return new TextDecoder().decode(data);
+                },
                 slice: (start?: number, end?: number, contentType?: string) => {
-                    const sliced = b.slice(start ?? 0, end ?? b.length);
-                    return {
-                        name: this.name,
-                        lastModified: Date.now(),
-                        size: sliced.length,
-                        type: contentType || '',
-                        arrayBuffer: async () => sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength),
-                        text: async () => new TextDecoder().decode(sliced)
-                    } as any;
+                    const sliceStart = start !== undefined ? (start < 0 ? Math.max(length + start, 0) : Math.min(start, length)) : 0;
+                    const sliceEnd = end !== undefined ? (end < 0 ? Math.max(length + end, 0) : Math.min(end, length)) : length;
+                    const sliceLength = Math.max(sliceEnd - sliceStart, 0);
+
+                    return createLazyFile(node, startOffset + sliceStart, sliceLength, name, lastModified, contentType || '');
                 },
                 stream: () => {
                     if (typeof ReadableStream !== 'undefined') {
                         return new ReadableStream({
-                            start(controller) {
-                                controller.enqueue(b);
+                            async start(controller) {
+                                if (length === 0) {
+                                    controller.close();
+                                    return;
+                                }
+                                const handle = node.open();
+                                handle.offset = startOffset;
+                                // Read in chunks if it's very large, but for now we read the whole slice
+                                const data = handle.readBytes(length);
+                                handle.close();
+                                controller.enqueue(data);
                                 controller.close();
                             }
                         });
@@ -98,7 +115,9 @@ export class FileSystemFileHandle extends FileSystemHandle {
                     throw new Error('ReadableStream not supported');
                 }
             } as unknown as File;
-        }
+        };
+
+        return createLazyFile(this.fileNode, 0, size, this.name, lastModified, 'application/octet-stream');
     }
 
     async createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream> {
@@ -483,10 +502,10 @@ export class FileSystemWritableFileStream {
         this._errorReason = reason ?? new TypeError('Stream was aborted');
 
         if (this.fileHandle) {
-            try { this.fileHandle.close(); } catch (e) { }
+            try { this.fileHandle.close(); } catch (e) { /* ignore */ }
         }
         if (this.swapNode.exists) {
-            try { this.swapNode.delete(); } catch (e) { }
+            try { this.swapNode.delete(); } catch (e) { /* ignore */ }
         }
 
         if (!this.isClosed) {
