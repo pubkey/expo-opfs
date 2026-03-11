@@ -51,13 +51,28 @@ This is powered by Expo SDK 55's modern `FileSystem` native C++ JSI bindings, ma
 
 ---
 
+## Performance
+
+`expo-opfs` is strictly optimized to align with native OPFS web performance where possible.
+
+| Benchmark | Browser OPFS (Chromium 145.0.7632.116) | Expo OPFS (Google Pixel 9) |
+| --- | --- | --- |
+| **Sequential small writes** (500 files) | ~763ms | **~969ms** |
+| **Sequential reads** (500 files) | ~365ms | **~350ms** |
+| **Directory Create/Delete** (500 ops) | ~223ms | **~702ms** |
+| **Random access writes** (50 ops on 5MB file) | ~1060ms | **~3291ms** |
+| **Random access reads** (500 slice reads on 5MB file) | ~235ms | **~49ms** |
+| **SyncAccessHandle writes** (1000 ops) | - | **~9ms** |
+
+---
+
 ## Testing
 
 The implementation is validated against the exact same test suites inside both a raw Node.js/JSDOM simulator and a native **physical smartphone environment** simultaneously via a unified Harness.
 
 1. **Browser Automated Suite**: Run `npm run test:browser` to execute native mock interactions instantly through Jest across a Chromium browser environment.
 2. **Expo Node Simulator**: Run `npm run test:expo` to execute the test suite natively under Expo's Jest preset simulating the React Native bridge.
-3. **On-Device Target Simulation**: Run `npm run test:example` to launch a fully configured minimal `App.tsx` container on your physical development device through Expo Go. The App transparently mounts the exact identical 111+ OPFS compliance benchmarks executed inside `npm run test`, natively resolving them asynchronously entirely outside the simulated Jest context, and logs the unified output straight to your screen!
+3. **On-Device Target Simulation**: Run `npm run test:example` to launch a fully configured minimal `App.tsx` container on your physical development device through Expo Go. The App transparently mounts the exact identical OPFS compliance benchmarks executed inside `npm run test`, natively resolving them asynchronously entirely outside the simulated Jest context, and logs the unified output straight to your screen!
 
 ## Resources
 
