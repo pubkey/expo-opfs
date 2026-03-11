@@ -1,6 +1,10 @@
 # expo-opfs
 
-[OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) polyfill for expo based on the [Expo Filesystem API](https://docs.expo.dev/versions/latest/sdk/filesystem/). Created for the [Expo RxStorage of RxDB](https://rxdb.info/react-native-database.html).
+[OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) polyfill for expo based on the [Expo Filesystem API](https://docs.expo.dev/versions/latest/sdk/filesystem/). 
+
+If you're building an Expo app and want to use a web library that needs the Origin Private File System (OPFS), this polyfill based on expo-filesystem makes it work out of the box.
+
+Created for the [Expo RxStorage of RxDB](https://rxdb.info/react-native-database.html).
 
 ## Usage
 
