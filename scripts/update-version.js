@@ -7,8 +7,14 @@ const version = packageJson.version;
 const indexPath = path.join(__dirname, '..', 'src', 'index.ts');
 let content = fs.readFileSync(indexPath, 'utf8');
 
+const pattern = /export const EXPO_OPFS_VERSION = ['"][^'"]*['"];/;
+if (!pattern.test(content)) {
+    console.error('Could not find EXPO_OPFS_VERSION in src/index.ts');
+    process.exit(1);
+}
+
 content = content.replace(
-    /export const EXPO_OPFS_VERSION = '[^']*';/,
+    pattern,
     `export const EXPO_OPFS_VERSION = '${version}';`
 );
 
