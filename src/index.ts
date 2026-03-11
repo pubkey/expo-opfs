@@ -125,7 +125,7 @@ export class FileSystemFileHandle extends FileSystemHandle {
     async createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle> {
         if (lockedFiles.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
         if (!this.fileNode.exists) {
-            this.fileNode.create();
+            throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
         }
 
         lockedFiles.add(this.path);
@@ -146,7 +146,7 @@ export class FileSystemSyncAccessHandle {
     }
 
     read(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
-        if (this.isClosed) throw new TypeError('Cannot read from a closed handle');
+        if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         if (options?.at !== undefined) {
             this.fileHandle.offset = options.at;
         }
@@ -179,7 +179,7 @@ export class FileSystemSyncAccessHandle {
     }
 
     write(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
-        if (this.isClosed) throw new TypeError('Cannot write to a closed handle');
+        if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         if (options?.at !== undefined) {
             this.fileHandle.offset = options.at;
         }
@@ -207,12 +207,12 @@ export class FileSystemSyncAccessHandle {
     }
 
     getSize(): number {
-        if (this.isClosed) throw new TypeError('Cannot get size of a closed handle');
+        if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         return this.fileHandle.size;
     }
 
     truncate(newSize: number): void {
-        if (this.isClosed) throw new TypeError('Cannot truncate a closed handle');
+        if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         if (newSize < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
         if (newSize === this.fileHandle.size) return;
 
@@ -240,7 +240,7 @@ export class FileSystemSyncAccessHandle {
     }
 
     flush(): void {
-        if (this.isClosed) throw new TypeError('Cannot flush a closed handle');
+        if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         // Synchronous operations physically write to device natively in Expo SDK 55
     }
 
@@ -487,6 +487,18 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
             throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
         }
 
+        if (lockedFiles.has(fullPath)) {
+            throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
+        }
+
+        if (dirNode.exists && options?.recursive) {
+            for (const lockedPath of lockedFiles) {
+                if (lockedPath.startsWith(fullPath + '/')) {
+                    throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
+                }
+            }
+        }
+
         if (dirNode.exists && !options?.recursive) {
             const contents = dirNode.list();
             if (contents.length > 0) {
@@ -496,6 +508,7 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
 
         const target = fileNode.exists ? fileNode : dirNode;
         target.delete();
+        lockedFiles.delete(fullPath);
     }
 
     async resolve(possibleDescendant: FileSystemHandle): Promise<string[] | null> {

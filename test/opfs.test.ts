@@ -1510,4 +1510,137 @@ describe('OPFS', () => {
     await writer.abort('boom');
     await expect(writer.write('b')).rejects.toThrow('boom');
   });
+
+  test('TypeMismatchError when getting file as directory (create: false)', async () => {
+    const root = await navigator.storage.getDirectory();
+    await root.getFileHandle('existing-file-no-create.txt', { create: true });
+    await expect(root.getDirectoryHandle('existing-file-no-create.txt', { create: false })).rejects.toHaveProperty('name', 'TypeMismatchError');
+  });
+
+  test('TypeMismatchError when getting directory as file (create: false)', async () => {
+    const root = await navigator.storage.getDirectory();
+    await root.getDirectoryHandle('existing-dir-no-create', { create: true });
+    await expect(root.getFileHandle('existing-dir-no-create', { create: false })).rejects.toHaveProperty('name', 'TypeMismatchError');
+  });
+
+  test('NotFoundError when calling getFile() on removed file handle', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('removed-file.txt', { create: true });
+    await root.removeEntry('removed-file.txt');
+    await expect(fh.getFile()).rejects.toHaveProperty('name', 'NotFoundError');
+  });
+
+  test('createWritable() on removed file handle still resolves (native behavior)', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('removed-file-writable.txt', { create: true });
+    await root.removeEntry('removed-file-writable.txt');
+    const stream = await fh.createWritable();
+    expect(stream).toBeDefined();
+    await stream.close();
+  });
+
+  test('NotFoundError when calling createSyncAccessHandle() on removed file handle', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('removed-file-sync.txt', { create: true });
+    await root.removeEntry('removed-file-sync.txt');
+    if (typeof (fh as any).createSyncAccessHandle !== 'function') return;
+    await expect((fh as any).createSyncAccessHandle()).rejects.toHaveProperty('name', 'NotFoundError');
+  });
+
+  test('NoModificationAllowedError when calling removeEntry() on a locked file', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('locked-remove.txt', { create: true });
+    const stream = await fh.createWritable();
+
+    await expect(root.removeEntry('locked-remove.txt')).rejects.toHaveProperty('name', 'NoModificationAllowedError');
+
+    await stream.close();
+    // After closing, it should be removable
+    await root.removeEntry('locked-remove.txt');
+  });
+
+  test('getFile() resolves successfully even if the file is locked', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('locked-read.txt', { create: true });
+    const stream = await fh.createWritable();
+
+    // Natively it resolves, so it shouldn't throw
+    const file = await fh.getFile();
+    expect(file).toBeDefined();
+
+    await stream.close();
+  });
+
+  test('TypeError when calling close() twice on FileSystemWritableFileStream', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('double-close-stream.txt', { create: true });
+    const stream = await fh.createWritable();
+    await stream.close();
+    await expect(stream.close()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  test('TypeError when calling truncate() or seek() on closed FileSystemWritableFileStream', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('closed-stream-ops.txt', { create: true });
+    const stream = await fh.createWritable();
+    await stream.close();
+    await expect(stream.truncate(0)).rejects.toBeInstanceOf(TypeError);
+    await expect(stream.seek(0)).rejects.toBeInstanceOf(TypeError);
+  });
+
+  test('InvalidStateError when operating on closed FileSystemSyncAccessHandle', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('closed-sync-access.txt', { create: true });
+    if (typeof (fh as any).createSyncAccessHandle !== 'function') return;
+
+    const accessHandle = await (fh as any).createSyncAccessHandle();
+    accessHandle.close();
+
+    let errorName = '';
+    try {
+      accessHandle.getSize();
+    } catch (e: any) {
+      errorName = e.name;
+    }
+    expect(errorName).toBe('InvalidStateError');
+
+    try {
+      accessHandle.truncate(0);
+    } catch (e: any) {
+      errorName = e.name;
+    }
+    expect(errorName).toBe('InvalidStateError');
+
+    try {
+      accessHandle.read(new Uint8Array(1), { at: 0 });
+    } catch (e: any) {
+      errorName = e.name;
+    }
+    expect(errorName).toBe('InvalidStateError');
+
+    try {
+      accessHandle.write(new Uint8Array(1), { at: 0 });
+    } catch (e: any) {
+      errorName = e.name;
+    }
+    expect(errorName).toBe('InvalidStateError');
+
+    try {
+      accessHandle.flush();
+    } catch (e: any) {
+      errorName = e.name;
+    }
+    expect(errorName).toBe('InvalidStateError');
+  });
+
+  test('no error when calling close() multiple times on FileSystemSyncAccessHandle', async () => {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle('double-close-sync.txt', { create: true });
+    if (typeof (fh as any).createSyncAccessHandle !== 'function') return;
+
+    const accessHandle = await (fh as any).createSyncAccessHandle();
+    accessHandle.close();
+    accessHandle.close(); // Second close should be a no-op per spec
+    accessHandle.close(); // Third close
+  });
 });
