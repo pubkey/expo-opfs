@@ -1,4 +1,7 @@
 import { File as ExpoFile, Directory as ExpoDirectory, Paths } from 'expo-file-system';
+
+export const EXPO_OPFS_VERSION = '1.0.5';
+
 const OPFS_ROOT = new ExpoDirectory(Paths.document, '.expo-opfs');
 
 if (typeof globalThis.DOMException === 'undefined') {
