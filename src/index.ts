@@ -65,7 +65,9 @@ export class FileSystemFileHandle extends FileSystemHandle {
             throw new DOMException('File could not be read', 'NotFoundError');
         }
 
-        const createLazyFile = (node: ExpoFile, startOffset: number, length: number, name: string, lastModified: number, type: string) => {
+        const createLazyFile = (node: ExpoFile, startOffset: number, length: number, name: string, lastModified: number, type: string, sharedState?: { handle: any }) => {
+            const state = sharedState || { handle: null };
+
             return {
                 name,
                 lastModified,
@@ -73,18 +75,16 @@ export class FileSystemFileHandle extends FileSystemHandle {
                 type,
                 arrayBuffer: async () => {
                     if (length === 0) return new ArrayBuffer(0);
-                    const handle = node.open();
-                    handle.offset = startOffset;
-                    const data = handle.readBytes(length);
-                    handle.close();
+                    if (!state.handle) state.handle = node.open();
+                    state.handle.offset = startOffset;
+                    const data = state.handle.readBytes(length);
                     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
                 },
                 text: async () => {
                     if (length === 0) return '';
-                    const handle = node.open();
-                    handle.offset = startOffset;
-                    const data = handle.readBytes(length);
-                    handle.close();
+                    if (!state.handle) state.handle = node.open();
+                    state.handle.offset = startOffset;
+                    const data = state.handle.readBytes(length);
                     return new TextDecoder().decode(data);
                 },
                 slice: (start?: number, end?: number, contentType?: string) => {
@@ -92,7 +92,7 @@ export class FileSystemFileHandle extends FileSystemHandle {
                     const sliceEnd = end !== undefined ? (end < 0 ? Math.max(length + end, 0) : Math.min(end, length)) : length;
                     const sliceLength = Math.max(sliceEnd - sliceStart, 0);
 
-                    return createLazyFile(node, startOffset + sliceStart, sliceLength, name, lastModified, contentType || '');
+                    return createLazyFile(node, startOffset + sliceStart, sliceLength, name, lastModified, contentType || '', state);
                 },
                 stream: () => {
                     if (typeof ReadableStream !== 'undefined') {
@@ -102,12 +102,22 @@ export class FileSystemFileHandle extends FileSystemHandle {
                                     controller.close();
                                     return;
                                 }
-                                const handle = node.open();
-                                handle.offset = startOffset;
-                                // Read in chunks if it's very large, but for now we read the whole slice
-                                const data = handle.readBytes(length);
-                                handle.close();
-                                controller.enqueue(data);
+                                if (!state.handle) state.handle = node.open();
+                                state.handle.offset = startOffset;
+
+                                const CHUNK_SIZE = 64 * 1024; // 64KB chunks
+                                let bytesRead = 0;
+                                while (bytesRead < length) {
+                                    const chunkLength = Math.min(CHUNK_SIZE, length - bytesRead);
+                                    const data = state.handle.readBytes(chunkLength);
+                                    controller.enqueue(data);
+                                    bytesRead += chunkLength;
+
+                                    // Yield to event loop every few chunks for large files
+                                    if (bytesRead % (CHUNK_SIZE * 16) === 0) {
+                                        await new Promise(resolve => setTimeout(resolve, 0));
+                                    }
+                                }
                                 controller.close();
                             }
                         });
@@ -199,8 +209,22 @@ export class FileSystemSyncAccessHandle {
 
     write(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
         if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
+
+        // Native JSI access optimization: Only check bounds and pad if specific `at` offsets 
+        // manually skip beyond the known bounds, preventing unnecessary size() lookups.
         if (options?.at !== undefined) {
             this.fileHandle.offset = options.at;
+            const currentSize = this.getSize();
+            if (this.fileHandle.offset > currentSize) {
+                // Native systems may not zero-pad implicitly if we seek beyond EOF
+                const padLen = this.fileHandle.offset - currentSize;
+                const padding = new Uint8Array(padLen);
+                const targetOffset = this.fileHandle.offset;
+
+                this.fileHandle.offset = currentSize;
+                this.fileHandle.writeBytes(padding);
+                this.fileHandle.offset = targetOffset;
+            }
         }
 
         const view = new Uint8Array(
@@ -208,18 +232,6 @@ export class FileSystemSyncAccessHandle {
             (buffer as ArrayBufferView).byteOffset || 0,
             (buffer as ArrayBufferView).byteLength || (buffer as ArrayBuffer).byteLength
         );
-
-        const currentSize = this.getSize();
-        if (this.fileHandle.offset > currentSize) {
-            // Native systems may not zero-pad implicitly if we seek beyond EOF
-            const padLen = this.fileHandle.offset - currentSize;
-            const padding = new Uint8Array(padLen);
-            const targetOffset = this.fileHandle.offset;
-
-            this.fileHandle.offset = currentSize;
-            this.fileHandle.writeBytes(padding);
-            this.fileHandle.offset = targetOffset;
-        }
 
         this.fileHandle.writeBytes(view);
         return view.length;
