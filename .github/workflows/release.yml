@@ -28,11 +28,11 @@ jobs:
         id: bump
         run: |
             if [ -z "${{ inputs.version }}" ]; then
-              VERSION=$(npm version patch --no-git-tag-version)
+              npm version patch --no-git-tag-version > /dev/null
             else
-              VERSION=$(npm version ${{ inputs.version }} --no-git-tag-version)
+              npm version ${{ inputs.version }} --no-git-tag-version > /dev/null
             fi
-            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "version=v$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
       - run: npm run build
       - run: npm run lint
       - run: npm test
