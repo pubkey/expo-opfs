@@ -1655,4 +1655,50 @@ describe('OPFS', () => {
     accessHandle.close(); // Second close should be a no-op per spec
     accessHandle.close(); // Third close
   });
+
+  test('Bug 1: Concurrent createWritable throws NoModificationAllowedError', async () => {
+    const OPFS_DIR = await globalThis.navigator.storage.getDirectory();
+    const fileHandle = await OPFS_DIR.getFileHandle('test-bug1.txt', { create: true });
+    const initW = await fileHandle.createWritable();
+    await initW.write('Initial Data');
+    await initW.close();
+
+    const w1 = await fileHandle.createWritable({ keepExistingData: true });
+    // In original code, this w2 would throw NoModificationAllowedError
+    const w2 = await fileHandle.createWritable({ keepExistingData: true });
+
+    await w1.write('W1 writes');
+    await w2.write('W2 writes');
+
+    // Final content should theoretically be whatever w2 wrote if w2 closes last? Or w1? 
+    await w1.close();
+    await w2.close();
+
+    // This test passes if it doesn't throw.
+    expect(true).toBe(true);
+  });
+
+  test('Bug 2: keepExistingData: false immediately truncates the target file instead of using a swap file', async () => {
+    const OPFS_DIR = await globalThis.navigator.storage.getDirectory();
+    const fileHandle = await OPFS_DIR.getFileHandle('test-bug2.txt', { create: true });
+
+    const initW2 = await fileHandle.createWritable();
+    await initW2.write('Should not be modified until close');
+    await initW2.close();
+
+    const snapshotFile = await fileHandle.getFile();
+
+    // W3C File System Standard: keepExistingData is false by default. It creates an empty swap file.
+    // The literal target file MUST NOT be truncated yet.
+    const w3 = await fileHandle.createWritable();
+
+    const text = await snapshotFile.text();
+
+    // If it was mutilated, text.length === 0 and this fails.
+    expect(text.length).toBeGreaterThanOrEqual(1);
+    expect(text).toBe('Should not be modified until close');
+
+    await w3.close();
+  });
 });
+

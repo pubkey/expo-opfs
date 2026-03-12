@@ -16,7 +16,8 @@ function isValidName(name: string): boolean {
     return name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\');
 }
 
-const lockedFiles = new Set<string>();
+const accessHandles = new Set<string>();
+const openWritableStreams = new Map<string, number>();
 
 export class FileSystemHandle {
     readonly kind: 'file' | 'directory';
@@ -139,34 +140,29 @@ export class FileSystemFileHandle extends FileSystemHandle {
     }
 
     async createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream> {
-        if (lockedFiles.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
-        let initialBytes: Uint8Array = new Uint8Array(0);
-        if (options?.keepExistingData && this.fileNode.exists) {
-            try {
-                initialBytes = await this.fileNode.bytes();
-            } catch (e) {
-                // file doesn't exist or can't be read, start empty
-            }
-        } else if (this.fileNode.exists) {
-            // Standard OPFS behavior: truncate file down to 0 bytes explicitly
-            this.fileNode.delete();
-            this.fileNode.create();
-        } else {
-            this.fileNode.create();
-        }
+        if (accessHandles.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
 
-        lockedFiles.add(this.path);
-        return new FileSystemWritableFileStream(this.path, options?.keepExistingData ?? false, () => lockedFiles.delete(this.path));
+        const count = openWritableStreams.get(this.path) ?? 0;
+        openWritableStreams.set(this.path, count + 1);
+
+        return new FileSystemWritableFileStream(this.path, options?.keepExistingData ?? false, () => {
+            const currentCount = openWritableStreams.get(this.path) ?? 0;
+            if (currentCount <= 1) {
+                openWritableStreams.delete(this.path);
+            } else {
+                openWritableStreams.set(this.path, currentCount - 1);
+            }
+        });
     }
 
     async createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle> {
-        if (lockedFiles.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
+        if (accessHandles.has(this.path) || openWritableStreams.has(this.path)) throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
         if (!this.fileNode.exists) {
             throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
         }
 
-        lockedFiles.add(this.path);
-        return new FileSystemSyncAccessHandle(this.fileNode.open(), this.fileNode, () => lockedFiles.delete(this.path));
+        accessHandles.add(this.path);
+        return new FileSystemSyncAccessHandle(this.fileNode.open(), this.fileNode, () => accessHandles.delete(this.path));
     }
 }
 
@@ -317,7 +313,7 @@ export class FileSystemWritableFileStream {
         // OPFS requires atomic writes.
         // We stream to a swap file to prevent partial writes from being visible
         // before close() is called.
-        this.swapNode = new ExpoFile(path + '.swap');
+        this.swapNode = new ExpoFile(path + '.swap.' + Math.random().toString(36).slice(2) + Date.now());
 
         this.keepExistingData = keepExistingData;
         this.onClose = onClose;
@@ -593,14 +589,15 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
         if (!isValidName(name)) throw new TypeError(`Name is not allowed: ${name}`);
         const fullPath = this.path + name;
 
-        if (lockedFiles.has(fullPath)) {
+        if (accessHandles.has(fullPath) || openWritableStreams.has(fullPath)) {
             throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
         }
 
         const fileNode = new ExpoFile(fullPath);
         if (fileNode.exists) {
             fileNode.delete();
-            lockedFiles.delete(fullPath);
+            accessHandles.delete(fullPath);
+            openWritableStreams.delete(fullPath);
             return;
         }
 
@@ -610,7 +607,12 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
         }
 
         if (options?.recursive) {
-            for (const lockedPath of lockedFiles) {
+            for (const lockedPath of accessHandles) {
+                if (lockedPath.startsWith(fullPath + '/')) {
+                    throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
+                }
+            }
+            for (const lockedPath of openWritableStreams.keys()) {
                 if (lockedPath.startsWith(fullPath + '/')) {
                     throw new DOMException('The object can not be modified in this way.', 'NoModificationAllowedError');
                 }
@@ -623,7 +625,8 @@ export class FileSystemDirectoryHandle extends FileSystemHandle {
         }
 
         dirNode.delete();
-        lockedFiles.delete(fullPath);
+        accessHandles.delete(fullPath);
+        openWritableStreams.delete(fullPath);
     }
 
     async resolve(possibleDescendant: FileSystemHandle): Promise<string[] | null> {
