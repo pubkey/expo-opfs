@@ -1,1 +1,1 @@
-export const EXPO_OPFS_VERSION = '1.0.5';
+export const EXPO_OPFS_VERSION = '1.0.6';
