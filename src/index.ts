@@ -171,17 +171,22 @@ export class FileSystemSyncAccessHandle {
     private fileNode: any;
     private isClosed: boolean = false;
     private onClose: () => void;
+    private _cursor: number = 0;
+    private _cachedSize: number;
 
     constructor(fileHandle: any, fileNode: any, onClose: () => void) {
         this.fileHandle = fileHandle;
         this.fileNode = fileNode;
         this.onClose = onClose;
+        this._cachedSize = fileHandle.size ?? 0;
+        this._cursor = fileHandle.offset ?? 0;
     }
 
     read(buffer: ArrayBuffer | ArrayBufferView, options?: { at: number }): number {
         if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         if (options?.at !== undefined) {
             this.fileHandle.offset = options.at;
+            this._cursor = options.at;
         }
 
         const view = new Uint8Array(
@@ -191,7 +196,7 @@ export class FileSystemSyncAccessHandle {
         );
 
         const currentSize = this.getSize();
-        const currentOffset = this.fileHandle.offset;
+        const currentOffset = this._cursor;
 
         if (currentOffset >= currentSize) {
             return 0; // EOF reached, nothing to read
@@ -208,6 +213,8 @@ export class FileSystemSyncAccessHandle {
         const readData: Uint8Array = this.fileHandle.readBytes(actualBytesToRead);
 
         view.set(readData);
+        this._cursor += readData.length;
+        // Native pointer advances automatically, keeping JS cursor in sync
         return readData.length;
     }
 
@@ -218,16 +225,18 @@ export class FileSystemSyncAccessHandle {
         // manually skip beyond the known bounds, preventing unnecessary size() lookups.
         if (options?.at !== undefined) {
             this.fileHandle.offset = options.at;
+            this._cursor = options.at;
             const currentSize = this.getSize();
-            if (this.fileHandle.offset > currentSize) {
+            if (this._cursor > currentSize) {
                 // Native systems may not zero-pad implicitly if we seek beyond EOF
-                const padLen = this.fileHandle.offset - currentSize;
+                const padLen = this._cursor - currentSize;
                 const padding = new Uint8Array(padLen);
-                const targetOffset = this.fileHandle.offset;
+                const targetOffset = this._cursor;
 
                 this.fileHandle.offset = currentSize;
                 this.fileHandle.writeBytes(padding);
                 this.fileHandle.offset = targetOffset;
+                this._cachedSize = targetOffset;
             }
         }
 
@@ -238,18 +247,23 @@ export class FileSystemSyncAccessHandle {
         );
 
         this.fileHandle.writeBytes(view);
+        this._cursor += view.length;
+        if (this._cursor > this._cachedSize) {
+            this._cachedSize = this._cursor;
+        }
         return view.length;
     }
 
     getSize(): number {
         if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
-        return this.fileHandle.size;
+        return this._cachedSize;
     }
 
     truncate(newSize: number): void {
         if (this.isClosed) throw new DOMException('An attempt was made to use an object that is not, or is no longer, usable', 'InvalidStateError');
         if (newSize < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
-        if (newSize === this.fileHandle.size) return;
+        const currentSize = this.getSize();
+        if (newSize === currentSize) return;
 
         // Try to update natively/via mock natively
         try {
@@ -260,9 +274,9 @@ export class FileSystemSyncAccessHandle {
 
         if (this.fileHandle.size !== newSize) {
             // Fallback rewrite approach if native JSI size assignment is readonly
-            const currentOffset = this.fileHandle.offset;
+            const currentOffset = this._cursor;
             this.fileHandle.offset = 0;
-            const fullData = this.fileHandle.readBytes(this.fileHandle.size);
+            const fullData = this.fileHandle.readBytes(currentSize);
 
             const resized = new Uint8Array(newSize);
             resized.set(fullData.subarray(0, Math.min(newSize, fullData.length)));
@@ -271,6 +285,10 @@ export class FileSystemSyncAccessHandle {
             this.fileNode.write(resized);
             this.fileHandle = this.fileNode.open();
             this.fileHandle.offset = Math.min(currentOffset, newSize);
+        }
+        this._cachedSize = newSize;
+        if (this._cursor > newSize) {
+            this._cursor = newSize;
         }
     }
 
