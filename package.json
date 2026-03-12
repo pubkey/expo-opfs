@@ -22,6 +22,7 @@
     "test:expo": "nyc jest --config jest.config.js",
     "test:browser": "npx playwright install chromium && vitest run",
     "test:example": "npm run build && cd example && npm start",
+    "version": "node scripts/update-version.js",
     "prepublishOnly": "npm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"

@@ -4,6 +4,7 @@
 coverage/
 test/
 example/
+scripts/
 jest.config.js
 jest.config.browser.js
 jest.setup.browser.js
