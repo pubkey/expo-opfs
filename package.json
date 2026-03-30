@@ -49,5 +49,10 @@
   "peerDependencies": {
     "expo": ">=54.0.0",
     "expo-file-system": ">=54.0.0"
+  },
+    "peerDependenciesMeta": {
+    "expo": {
+      "optional": true
+    }
   }
 }
