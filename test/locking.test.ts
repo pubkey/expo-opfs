@@ -5,13 +5,13 @@ describe('OPFS Error usage tests 2', () => {
     const root = await navigator.storage.getDirectory();
     const fileHandle = await root.getFileHandle('lock2.txt', { create: true });
 
+    if (typeof (fileHandle as any).createSyncAccessHandle !== 'function') return;
+
     const stream1 = await fileHandle.createWritable();
 
     let error: Error | undefined;
     try {
-      if (typeof (fileHandle as any).createSyncAccessHandle === 'function') {
-        await (fileHandle as any).createSyncAccessHandle();
-      }
+      await (fileHandle as any).createSyncAccessHandle();
     } catch (e: any) {
       error = e;
     }
