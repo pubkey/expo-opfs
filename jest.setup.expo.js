@@ -29,3 +29,9 @@ jest.unmock('expo-file-system/legacy');
 jest.unmock('expo-file-system');
 const { applyPolyfill } = require('./src/index.ts');
 applyPolyfill();
+
+const failOnConsole = require('jest-fail-on-console');
+failOnConsole({
+    shouldFailOnWarn: true,
+    shouldFailOnError: true,
+});

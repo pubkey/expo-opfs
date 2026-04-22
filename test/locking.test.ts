@@ -16,7 +16,8 @@ describe('OPFS Error usage tests 2', () => {
       error = e;
     }
 
-    console.log('Error type for SyncAccessHandle during createWritable:', error?.name, error?.message);
+    expect(error).toBeDefined();
+    expect(error?.name).toBe('NoModificationAllowedError');
 
     await stream1.close();
   });
@@ -36,6 +37,7 @@ describe('OPFS Error usage tests 2', () => {
     } catch (e: any) {
       error = e;
     }
-    console.log('Error type for closed SyncAccessHandle:', error?.name, error?.message);
+    expect(error).toBeDefined();
+    expect(error?.name).toBe('InvalidStateError');
   });
 });
