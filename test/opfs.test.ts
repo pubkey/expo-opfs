@@ -1700,5 +1700,37 @@ describe('OPFS', () => {
 
     await w3.close();
   });
+
+  /**
+   * @link https://github.com/pubkey/rxdb/issues/8290
+   */
+  test('Bug 8290: keepExistingData: true with rapid sequential open/write/close', async () => {
+    const OPFS_DIR = await globalThis.navigator.storage.getDirectory();
+    const fileHandle = await OPFS_DIR.getFileHandle('test-bug8290.txt', { create: true });
+
+    // Write a large 1MB data payload to ensure OS flush takes time
+    const largeData = 'A'.repeat(1024 * 1024);
+
+    const w1 = await fileHandle.createWritable();
+    await w1.write(largeData);
+    await w1.close();
+
+    // Perform rapid open-write-close cycles immediately
+    // If the OS hasn't fully flushed the 1MB file, the keepExistingData copy will read < 1MB
+    for (let i = 0; i < 5; i++) {
+      const w = await fileHandle.createWritable({ keepExistingData: true });
+      // Write a tiny change at the very end
+      await w.write({ type: 'seek', position: largeData.length + i });
+      await w.write('X');
+      await w.close();
+    }
+
+    const file = await fileHandle.getFile();
+    const size = file.size;
+
+    // It should have preserved the 1MB + 5 bytes. 
+    // If it truncated, size will be much smaller.
+    expect(size).toBe((1024 * 1024) + 5);
+  });
 });
 

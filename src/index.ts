@@ -19,6 +19,18 @@ function isValidName(name: string): boolean {
 const accessHandles = new Set<string>();
 const openWritableStreams = new Map<string, number>();
 
+// Global operation queue to ensure overlapping IO tasks are serialized on a per-path basis.
+const operationQueues = new Map<string, Promise<any>>();
+
+function enqueue<T>(path: string, task: () => Promise<T>): Promise<T> {
+    const prev = operationQueues.get(path) ?? Promise.resolve();
+    // Use .then(task, task) to ensure task runs even if previous failed, though we want to bubble up its specific error context if possible. 
+    // ACTUALLY if a previous promise throws, we still want to execute the next one sequentially, so we catch and ignore previous errors.
+    const next = prev.catch(() => { }).then(task);
+    operationQueues.set(path, next);
+    return next;
+}
+
 export class FileSystemHandle {
     readonly kind: 'file' | 'directory';
     readonly name: string;
@@ -318,6 +330,7 @@ export class FileSystemWritableFileStream {
     private swapNode: ExpoFile;
     private fileHandle: any = null; // Expo FileHandle
     private cursor: number = 0;
+    private _cachedSize: number = 0;
     private isClosed: boolean = false;
     private isErrored: boolean = false;
     private _errorReason: any = null;
@@ -348,10 +361,13 @@ export class FileSystemWritableFileStream {
                 // Copy existing data into the swap file if we are keeping it
                 const existingHandle = this.fileNode.open();
                 const swapHandle = this.swapNode.open();
-                const data = existingHandle.readBytes(existingHandle.size ?? 0);
+                this._cachedSize = existingHandle.size ?? 0;
+                const data = existingHandle.readBytes(this._cachedSize);
                 swapHandle.writeBytes(data);
                 existingHandle.close();
                 swapHandle.close();
+            } else {
+                this._cachedSize = 0;
             }
 
             this.fileHandle = this.swapNode.open();
@@ -359,38 +375,40 @@ export class FileSystemWritableFileStream {
     }
 
     async write(data: string | BufferSource | Blob | WriteParams): Promise<void> {
-        if (this.isErrored) {
-            throw typeof this._errorReason === 'string' ? new Error(this._errorReason) : this._errorReason;
-        }
-        if (this.isClosed) throw new TypeError('Cannot write to a CLOSED writable stream');
-
-        if (data === undefined || data === null) {
-            throw new TypeError("Failed to execute 'write' on 'FileSystemWritableFileStream': Invalid params passed. write requires a non-null data");
-        }
-
-        if (typeof data === 'object' && 'type' in data && (data.type === 'write' || data.type === 'seek' || data.type === 'truncate')) {
-            const p = data as WriteParams;
-            if (p.type === 'truncate') {
-                if (p.size === undefined || p.size < 0) throw new TypeError('Invalid size value');
-                await this.truncate(p.size);
-                return;
-            } else if (p.type === 'seek') {
-                if (p.position === undefined || p.position < 0) throw new TypeError('Invalid position value');
-                this.cursor = p.position;
-                return;
-            } else if (p.type === 'write') {
-                if (p.position !== undefined) {
-                    if (p.position < 0) throw new TypeError('Invalid position value');
-                    this.cursor = p.position;
-                }
-                const writeData = p.data;
-                if (writeData === undefined || writeData === null) return; // Spec: type write with null data is no-op
-                await this.writeChunk(writeData);
-                return;
+        return enqueue(this.path, async () => {
+            if (this.isErrored) {
+                throw typeof this._errorReason === 'string' ? new Error(this._errorReason) : this._errorReason;
             }
-        } else {
-            await this.writeChunk(data as string | BufferSource | Blob);
-        }
+            if (this.isClosed) throw new TypeError('Cannot write to a CLOSED writable stream');
+
+            if (data === undefined || data === null) {
+                throw new TypeError("Failed to execute 'write' on 'FileSystemWritableFileStream': Invalid params passed. write requires a non-null data");
+            }
+
+            if (typeof data === 'object' && 'type' in data && (data.type === 'write' || data.type === 'seek' || data.type === 'truncate')) {
+                const p = data as WriteParams;
+                if (p.type === 'truncate') {
+                    if (p.size === undefined || p.size < 0) throw new TypeError('Invalid size value');
+                    await this._truncateLocked(p.size);
+                    return;
+                } else if (p.type === 'seek') {
+                    if (p.position === undefined || p.position < 0) throw new TypeError('Invalid position value');
+                    this.cursor = p.position;
+                    return;
+                } else if (p.type === 'write') {
+                    if (p.position !== undefined) {
+                        if (p.position < 0) throw new TypeError('Invalid position value');
+                        this.cursor = p.position;
+                    }
+                    const writeData = p.data;
+                    if (writeData === undefined || writeData === null) return; // Spec: type write with null data is no-op
+                    await this.writeChunk(writeData);
+                    return;
+                }
+            } else {
+                await this.writeChunk(data as string | BufferSource | Blob);
+            }
+        });
     }
 
     private async writeChunk(data: string | BufferSource | Blob) {
@@ -439,15 +457,24 @@ export class FileSystemWritableFileStream {
         this.fileHandle.offset = this.cursor;
         this.fileHandle.writeBytes(bytes);
         this.cursor += bytes.length;
+        if (this.cursor > this._cachedSize) {
+            this._cachedSize = this.cursor;
+        }
     }
 
     async truncate(size: number): Promise<void> {
+        return enqueue(this.path, async () => {
+            await this._truncateLocked(size);
+        });
+    }
+
+    private async _truncateLocked(size: number): Promise<void> {
         if (this.isErrored) throw this._errorReason ?? new TypeError('Stream is errored');
         if (this.isClosed) throw new TypeError('Stream is closed');
         if (size < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
         this.lazyInit();
 
-        const currentSize = this.fileHandle.size;
+        const currentSize = this._cachedSize;
         if (size === currentSize) return;
 
         try {
@@ -459,7 +486,7 @@ export class FileSystemWritableFileStream {
         if (this.fileHandle.size !== size) {
             const currentOffset = this.fileHandle.offset;
             this.fileHandle.offset = 0;
-            const fullData = this.fileHandle.readBytes(this.fileHandle.size);
+            const fullData = this.fileHandle.readBytes(currentSize);
             const resized = new Uint8Array(size);
             resized.set(fullData.subarray(0, Math.min(size, fullData.length)));
 
@@ -469,57 +496,63 @@ export class FileSystemWritableFileStream {
             this.fileHandle.offset = Math.min(currentOffset, size);
         }
 
+        this._cachedSize = size;
         if (this.cursor > size) {
             this.cursor = size;
         }
     }
 
     async seek(position: number): Promise<void> {
-        if (this.isErrored) throw this._errorReason ?? new TypeError('Stream is errored');
-        if (this.isClosed) throw new TypeError('Stream is closed');
-        if (position < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
-        this.cursor = position;
+        return enqueue(this.path, async () => {
+            if (this.isErrored) throw this._errorReason ?? new TypeError('Stream is errored');
+            if (this.isClosed) throw new TypeError('Stream is closed');
+            if (position < 0) throw new DOMException('IndexSizeError', 'IndexSizeError');
+            this.cursor = position;
+        });
     }
 
     async close(): Promise<void> {
-        if (this.isErrored) {
-            throw new TypeError('Cannot close a ERRORED writable stream');
-        }
-        if (this.isClosed) throw new TypeError('Cannot create writer when WritableStream is locked');
-
-        try {
-            if (this.fileHandle) {
-                this.fileHandle.close();
-
-                // Atomic commit: move swap file over the original file
-                if (this.fileNode.exists) {
-                    this.fileNode.delete();
-                }
-                // Workaround for expo-file-system lack of synchronous move:
-                // Read swap file completely and write to the target natively
-                const swapHandle = this.swapNode.open();
-                const finalData = swapHandle.readBytes(swapHandle.size ?? 0);
-                swapHandle.close();
-
-                this.fileNode.create();
-                const finalHandle = this.fileNode.open();
-                finalHandle.writeBytes(finalData);
-                finalHandle.close();
-
-                this.swapNode.delete();
-            } else {
-                // Zero-byte file that was created and immediately closed
-                if (!this.fileNode.exists) {
-                    this.fileNode.create();
-                } else if (!this.keepExistingData) {
-                    this.fileNode.delete();
-                    this.fileNode.create();
-                }
+        return enqueue(this.path, async () => {
+            if (this.isErrored) {
+                throw new TypeError('Cannot close a ERRORED writable stream');
             }
-        } finally {
-            this.isClosed = true;
-            this.onClose();
-        }
+            if (this.isClosed) throw new TypeError('Cannot create writer when WritableStream is locked');
+
+            try {
+                if (this.fileHandle) {
+                    this.fileHandle.close();
+
+                    // Atomic commit: move swap file over the original file
+                    if (this.fileNode.exists) {
+                        this.fileNode.delete();
+                    }
+
+                    // Workaround for expo-file-system lack of synchronous move:
+                    // Read swap file completely and write to the target natively
+                    const swapHandle = this.swapNode.open();
+                    const finalData = swapHandle.readBytes(this._cachedSize);
+                    swapHandle.close();
+
+                    this.fileNode.create();
+                    const finalHandle = this.fileNode.open();
+                    finalHandle.writeBytes(finalData);
+                    finalHandle.close();
+
+                    this.swapNode.delete();
+                } else {
+                    // Zero-byte file that was created and immediately closed
+                    if (!this.fileNode.exists) {
+                        this.fileNode.create();
+                    } else if (!this.keepExistingData) {
+                        this.fileNode.delete();
+                        this.fileNode.create();
+                    }
+                }
+            } finally {
+                this.isClosed = true;
+                this.onClose();
+            }
+        });
     }
 
     getWriter() {
